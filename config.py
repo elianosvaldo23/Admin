@@ -5,7 +5,7 @@ GROUP_ID = "botoneraMultimediaTv"  # Grupo username sin @
 CATEGORY_CHANNEL_ID = -1002259108243
 
 # URL de MongoDB (actualiza con tu URL de MongoDB real)
-MONGO_URI = "mongodb+srv://username:password@cluster.mongodb.net/botonera_bot"
+MONGO_URI = "mongodb+srv://admin-bot:admin-bot@cluster0.iy2sx93.mongodb.net/Admin-bot?retryWrites=true&w=majority&appName=Cluster0"
 
 # Categorías con sus URLs de post
 CATEGORIES = {
