@@ -647,6 +647,42 @@ async def edit_channel_info(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.edit_message_text(message, reply_markup=reply_markup)
     await query.answer()
 
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Muestra estadísticas del usuario."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    
+    # Obtener estadísticas
+    user_stats = db.get_user_stats(user_id, chat_id)
+    warnings = db.get_warnings(user_id, chat_id)
+    
+    # Crear mensaje de estadísticas
+    stats_message = (
+        f"📊 <b>Estadísticas de {update.effective_user.first_name}</b>\n\n"
+        f"Mensajes enviados: {user_stats['messages']}\n"
+        f"Medios compartidos: {user_stats['media']}\n"
+        f"Comandos utilizados: {user_stats['commands']}\n"
+        f"Advertencias: {warnings['count']}/3\n"
+        f"Última actividad: {user_stats['last_active'] if user_stats['last_active'] else 'Desconocida'}"
+    )
+    
+    # Crear botones
+    keyboard = [
+        [
+            InlineKeyboardButton("📈 Estadísticas Globales", callback_data="global_stats"),
+            InlineKeyboardButton("🔄 Actualizar", callback_data="refresh_stats")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_html(
+        stats_message,
+        reply_markup=reply_markup
+    )
+    
+    # Actualizar estadísticas
+    db.update_user_stats(user_id, chat_id, "commands")
+
 async def handle_change_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Inicia el proceso para cambiar el nombre de un canal."""
     query = update.callback_query
