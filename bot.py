@@ -982,6 +982,57 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # Actualizar estadísticas
     db.update_user_stats(user_id, chat_id, "commands")
 
+async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Envía un anuncio al grupo."""
+    user_id = update.effective_user.id
+    
+    # Verificar si el usuario es administrador
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("Solo el administrador principal puede usar este comando.")
+        return
+    
+    # Verificar argumentos
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text(
+            "Por favor, proporciona el mensaje que deseas anunciar.\n"
+            "Ejemplo: /announce Importante: Nueva actualización del grupo"
+        )
+        return
+    
+    # Obtener mensaje
+    announcement = " ".join(context.args)
+    
+    # Crear mensaje de anuncio
+    announcement_message = (
+        f"📢 <b>ANUNCIO IMPORTANTE</b> 📢\n\n"
+        f"{html.escape(announcement)}\n\n"
+        f"<i>Enviado por: Administración</i>"
+    )
+    
+    # Crear botones
+    keyboard = [
+        [
+            InlineKeyboardButton("👍 Entendido", callback_data="ack_announcement"),
+            InlineKeyboardButton("❓ Más Información", callback_data="more_info_announcement")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Enviar anuncio al grupo
+    try:
+        await context.bot.send_message(
+            chat_id=f"@{GROUP_ID}",
+            text=announcement_message,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+        
+        await update.message.reply_text("✅ Anuncio enviado exitosamente.")
+        
+    except TelegramError as e:
+        await update.message.reply_text(f"Error al enviar el anuncio: {e}")
+
+
 async def handle_delete_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja la eliminación de un canal."""
     query = update.callback_query
