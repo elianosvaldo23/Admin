@@ -855,6 +855,133 @@ async def update_category_message(context, category):
         logger.error(f"Error updating category message: {e}")
         return False
 
+async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Banea a un usuario."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    
+    # Verificar si el usuario es administrador
+    if not await is_admin(user_id, chat_id, context):
+        await update.message.reply_text("Solo los administradores pueden usar este comando.")
+        return
+    
+    # Verificar argumentos
+    if not update.message.reply_to_message and (not context.args or len(context.args) < 1):
+        await update.message.reply_text(
+            "Por favor, responde al mensaje del usuario que deseas banear o proporciona su ID/username.\n"
+            "Ejemplo: /ban @usuario Razón del ban"
+        )
+        return
+    
+    # Obtener usuario objetivo
+    target_user = None
+    reason = "Sin especificar"
+    
+    # Si el mensaje es una respuesta, usar ese usuario
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        target_user = update.message.reply_to_message.from_user
+        if context.args:
+            reason = " ".join(context.args)
+    else:
+        # Intentar obtener usuario por nombre de usuario o ID
+        try:
+            if context.args[0].startswith("@"):
+                # Es un nombre de usuario
+                username = context.args[0][1:]
+                # No podemos obtener el ID directamente del nombre de usuario
+                await update.message.reply_text(
+                    "Por favor, responde al mensaje del usuario o usa su ID numérico."
+                )
+                return
+            else:
+                # Podría ser un ID
+                try:
+                    target_id = int(context.args[0])
+                    try:
+                        target_user = await context.bot.get_chat_member(chat_id, target_id)
+                        target_user = target_user.user
+                    except TelegramError:
+                        await update.message.reply_text("No se pudo encontrar al usuario con ese ID.")
+                        return
+                except ValueError:
+                    await update.message.reply_text("ID de usuario inválido.")
+                    return
+            
+            if len(context.args) >= 2:
+                reason = " ".join(context.args[1:])
+        except IndexError:
+            await update.message.reply_text("Por favor, proporciona un usuario.")
+            return
+    
+    if not target_user:
+        await update.message.reply_text("No se pudo identificar al usuario.")
+        return
+    
+    # Banear al usuario
+    try:
+        await context.bot.ban_chat_member(chat_id, target_user.id)
+        
+        # Crear mensaje de ban
+        ban_message = (
+            f"🚫 <b>Usuario Baneado</b> 🚫\n\n"
+            f"Usuario: {target_user.mention_html()}\n"
+            f"ID: {target_user.id}\n"
+            f"Razón: {html.escape(reason)}"
+        )
+        
+        # Enviar mensaje
+        keyboard = [
+            [InlineKeyboardButton("🔓 Desbanear", callback_data=f"unban_{target_user.id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_html(ban_message, reply_markup=reply_markup)
+        
+    except TelegramError as e:
+        await update.message.reply_text(f"Error al banear al usuario: {e}")
+    
+    # Actualizar estadísticas
+    db.update_user_stats(user_id, chat_id, "commands")
+
+async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Desbanea a un usuario."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    
+    # Verificar si el usuario es administrador
+    if not await is_admin(user_id, chat_id, context):
+        await update.message.reply_text("Solo los administradores pueden usar este comando.")
+        return
+    
+    # Verificar argumentos
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text(
+            "Por favor, proporciona el ID del usuario que deseas desbanear.\n"
+            "Ejemplo: /unban 123456789"
+        )
+        return
+    
+    # Obtener ID del usuario
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("ID de usuario inválido.")
+        return
+    
+    # Desbanear al usuario
+    try:
+        await context.bot.unban_chat_member(chat_id, target_id)
+        
+        await update.message.reply_html(
+            f"✅ Usuario con ID {target_id} desbaneado exitosamente."
+        )
+        
+    except TelegramError as e:
+        await update.message.reply_text(f"Error al desbanear al usuario: {e}")
+    
+    # Actualizar estadísticas
+    db.update_user_stats(user_id, chat_id, "commands")
+
 async def handle_delete_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja la eliminación de un canal."""
     query = update.callback_query
