@@ -1,11 +1,17 @@
+import os
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde archivo .env
+load_dotenv()
+
 # Configuración del bot
 TOKEN = "7675635354:AAEkxM528h5vEa2auoMr94x1tWIGop8xKgo"
 ADMIN_ID = 1742433244
 GROUP_ID = "botoneraMultimediaTv"  # Grupo username sin @
 CATEGORY_CHANNEL_ID = -1002259108243
 
-# URL de MongoDB (actualiza con tu URL de MongoDB real)
-MONGO_URI = "mongodb+srv://admin-bot:admin-bot@cluster0.iy2sx93.mongodb.net/Admin-bot?retryWrites=true&w=majority&appName=Cluster0"
+# URL de MongoDB
+MONGO_URI = os.getenv("MONGO_URI")
 
 # Categorías con sus URLs de post
 CATEGORIES = {
