@@ -2594,7 +2594,7 @@ async def process_button_input(update: Update, context: ContextTypes.DEFAULT_TYP
             await show_post_creation_menu(update.message, user_id)
 
 async def configure_post_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Configura la programación del post."""
+    """Muestra el menú principal de configuración de horario."""
     query = update.callback_query
     user_id = query.from_user.id
     
@@ -2644,23 +2644,20 @@ async def configure_post_schedule(update: Update, context: ContextTypes.DEFAULT_
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Enviar o actualizar el mensaje
-        try:
-            await query.edit_message_text(
-                message,
-                parse_mode=ParseMode.HTML,
-                reply_markup=reply_markup
-            )
-        except telegram.error.BadRequest as e:
-            if "message is not modified" not in str(e).lower():
-                raise
-            
-    except Exception as e:
-        logger.error(f"Error en configure_post_schedule: {e}")
-        try:
-            await query.answer("Error al configurar el horario", show_alert=True)
-        except:
-            pass
+        await query.edit_message_text(
+            message,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+        await query.answer()
+        
+    except telegram.error.BadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"Error en configure_post_schedule: {e}")
+            try:
+                await query.answer("Error al mostrar el menú", show_alert=True)
+            except:
+                pass
             
 async def handle_schedule_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, callback_data: str, schedule: dict) -> None:
     """Maneja las acciones específicas del horario."""
@@ -2859,7 +2856,12 @@ async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_
     callback_data = query.data
     
     try:
-        if callback_data == "post_sched_days":
+        if callback_data == "post_sched":
+            # Volver al menú de programación principal
+            await configure_post_schedule(update, context)
+            return
+            
+        elif callback_data == "post_sched_days":
             # Mostrar selector de días
             await show_days_selector(update, context)
             return
@@ -2867,11 +2869,6 @@ async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_
         elif callback_data.startswith("post_sched_toggle_day_"):
             # Manejar selección de día
             await toggle_day_selection(update, context)
-            return
-            
-        elif callback_data == "post_sched":
-            # Volver al menú de programación
-            await configure_post_schedule(update, context)
             return
             
         elif callback_data == "post_sched_hour":
@@ -2890,7 +2887,7 @@ async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_
             return
             
         elif callback_data == "post_cancel_input":
-            # Volver al menú principal
+            # Volver al menú de creación de post
             state["current_step"] = "text"
             await show_post_creation_menu(query, user_id)
             return
@@ -2908,12 +2905,14 @@ async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_
 async def show_days_selector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Muestra el selector de días."""
     query = update.callback_query
-    state = post_creation_state[query.from_user.id]
+    user_id = query.from_user.id
+    state = post_creation_state[user_id]
     schedule = state["schedule"]
     
     days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     keyboard = []
     
+    # Crear botones para cada día
     for i, day in enumerate(days):
         is_selected = i in schedule['days']
         prefix = "✅" if is_selected else "❌"
@@ -2922,6 +2921,7 @@ async def show_days_selector(update: Update, context: ContextTypes.DEFAULT_TYPE)
             callback_data=f"post_sched_toggle_day_{i}"
         )])
     
+    # Añadir botón volver
     keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
     
     try:
@@ -2939,26 +2939,30 @@ async def show_days_selector(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def toggle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja la selección/deselección de días."""
     query = update.callback_query
-    state = post_creation_state[query.from_user.id]
+    user_id = query.from_user.id
+    state = post_creation_state[user_id]
     schedule = state["schedule"]
     
     try:
+        # Extraer índice del día
         day_index = int(query.data.split("_")[-1])
         if 0 <= day_index <= 6:
             # Toggle día
             if day_index in schedule['days']:
                 schedule['days'].remove(day_index)
+                action = "deseleccionado"
             else:
                 schedule['days'].append(day_index)
+                action = "seleccionado"
             
             # Asegurar que hay al menos un día seleccionado
             if not schedule['days']:
                 schedule['days'].append(datetime.now().weekday())
             schedule['days'].sort()
             
-            # Actualizar vista
+            # Mostrar selector actualizado
             await show_days_selector(update, context)
-            await query.answer("Día actualizado")
+            await query.answer(f"Día {action}")
         else:
             await query.answer("Día inválido", show_alert=True)
     except ValueError:
@@ -3074,11 +3078,13 @@ async def show_duration_selector(update: Update, context: ContextTypes.DEFAULT_T
 async def handle_specific_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, callback_data: str) -> None:
     """Maneja acciones específicas como establecer hora, minutos, duración, etc."""
     query = update.callback_query
-    state = post_creation_state[query.from_user.id]
+    user_id = query.from_user.id
+    state = post_creation_state[user_id]
     schedule = state["schedule"]
     
     try:
         if callback_data.startswith("post_sched_set_hour_"):
+            # Configurar hora
             hour = int(callback_data.split("_")[-1])
             if 0 <= hour < 24:
                 schedule['hour'] = hour
@@ -3088,6 +3094,7 @@ async def handle_specific_actions(update: Update, context: ContextTypes.DEFAULT_
                 await query.answer("Hora inválida", show_alert=True)
                 
         elif callback_data.startswith("post_sched_set_minute_"):
+            # Configurar minutos
             minute = int(callback_data.split("_")[-1])
             if minute in [0, 15, 30, 45]:
                 schedule['minute'] = minute
@@ -3097,6 +3104,7 @@ async def handle_specific_actions(update: Update, context: ContextTypes.DEFAULT_
                 await query.answer("Minutos inválidos", show_alert=True)
                 
         elif callback_data.startswith("post_sched_set_duration_"):
+            # Configurar duración
             duration = int(callback_data.split("_")[-1])
             if duration in [6, 12, 24, 48, 72]:
                 schedule['duration'] = duration
@@ -3106,6 +3114,7 @@ async def handle_specific_actions(update: Update, context: ContextTypes.DEFAULT_
                 await query.answer("Duración inválida", show_alert=True)
                 
         elif callback_data == "post_sched_toggle_daily":
+            # Toggle modo diario
             schedule['daily'] = not schedule['daily']
             await query.answer(f"Modo {'diario' if schedule['daily'] else 'días específicos'} activado")
             await configure_post_schedule(update, context)
