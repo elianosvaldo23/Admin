@@ -49,8 +49,25 @@ user_last_activity = {}  # Para seguimiento de actividad
 user_editing_state = {}  # Para seguimiento de estados de edición
 scheduled_posts = {}  # Para posts programados
 
-# Estado global para manejar la creación de posts automáticos
-post_creation_state = {}
+def init_post_state(user_id: int) -> None:
+    """Inicializa el estado de creación de post para un usuario."""
+    post_creation_state[user_id] = {
+        "post_id": f"post_{int(time.time())}",
+        "text": "",
+        "image": None,
+        "buttons": [],
+        "selected_channels": [],
+        "schedule": {
+            "hour": 12,
+            "minute": 0,
+            "daily": False,
+            "days": [datetime.now().weekday()],
+            "duration": 24
+        },
+        "current_step": "text",
+        "temp_button_text": None,
+        "button_type": None
+    }
 
 # Cargar configuración desde MongoDB
 def load_config_from_db():
@@ -1079,7 +1096,7 @@ async def handle_delete_channel(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Maneja callbacks de botones."""
+    """Maneja callbacks de botones en un bot de Telegram."""
     query = update.callback_query
     await query.answer()
     
@@ -1386,6 +1403,86 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if user_id != ADMIN_ID:
             await query.answer("Solo el administrador principal puede acceder a esta función.", show_alert=True)
             return
+        
+        # Inicializar estado si no existe
+        if user_id not in post_creation_state:
+            init_post_state(user_id)
+        
+        # Mostrar menú de creación de post
+        await show_post_creation_menu(query, user_id)
+        return
+
+    # Manejar acciones de creación de post
+    elif callback_data == "post_add_text":
+        if user_id != ADMIN_ID:
+            await query.answer("Solo el administrador puede crear posts.", show_alert=True)
+            return
+        
+        state = post_creation_state[user_id]
+        state["current_step"] = "waiting_for_text"
+        
+        await query.edit_message_text(
+            "📝 Por favor, envía el texto para el post.\n\n"
+            "Puedes usar formato HTML básico:\n"
+            "<b>negrita</b>, <i>cursiva</i>, <code>código</code>, <u>subrayado</u>\n"
+            "<a href='URL'>texto con enlace</a>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancelar", callback_data="post_cancel_input")
+            ]])
+        )
+        return
+
+    elif callback_data == "post_add_buttons":
+        if user_id != ADMIN_ID:
+            await query.answer("Solo el administrador puede configurar botones.", show_alert=True)
+            return
+        
+        await show_button_menu(update, context)
+        return
+
+    elif callback_data.startswith("post_btn_"):
+        if user_id != ADMIN_ID:
+            await query.answer("Solo el administrador puede configurar botones.", show_alert=True)
+            return
+        
+        await handle_button_actions(update, context)
+        return
+
+    elif callback_data == "post_schedule":
+        if user_id != ADMIN_ID:
+            await query.answer("Solo el administrador puede configurar el horario.", show_alert=True)
+            return
+        
+        await configure_post_schedule(update, context)
+        return
+
+    elif callback_data.startswith("post_sched_"):
+        if user_id != ADMIN_ID:
+            await query.answer("Solo el administrador puede configurar el horario.", show_alert=True)
+            return
+        
+        await handle_schedule_setting(update, context)
+        return
+
+    elif callback_data == "post_save":
+        if user_id != ADMIN_ID:
+            await query.answer("Solo el administrador puede guardar posts.", show_alert=True)
+            return
+        
+        await save_auto_post(update, context)
+        return
+
+    elif callback_data == "post_cancel_input":
+        if user_id != ADMIN_ID or user_id not in post_creation_state:
+            await query.answer("No hay un proceso de creación activo.", show_alert=True)
+            return
+        
+        state = post_creation_state[user_id]
+        state["current_step"] = "text"
+        await show_post_creation_menu(query, user_id)
+        return
+
         
         keyboard = [
             [
@@ -2544,12 +2641,11 @@ async def process_button_input(update: Update, context: ContextTypes.DEFAULT_TYP
         }
         state["buttons"].append(new_button)
         
-        # Limpiar estado temporal
+        # Limpiar estado temporal y confirmar
         state["current_step"] = "text"
         del state["temp_button_text"]
         del state["button_type"]
         
-        # Confirmar y mostrar menú de botones
         await update.message.reply_text("✅ Botón añadido correctamente.")
         await show_post_creation_menu(update.message, user_id)
         
@@ -2570,28 +2666,65 @@ async def process_button_input(update: Update, context: ContextTypes.DEFAULT_TYP
         }
         state["buttons"].append(new_button)
         
-        # Limpiar estado temporal
+        # Limpiar estado temporal y confirmar
         state["current_step"] = "text"
         del state["temp_button_text"]
         del state["button_type"]
         
-        # Confirmar y mostrar menú de botones
         await update.message.reply_text("✅ Botón añadido correctamente.")
         await show_post_creation_menu(update.message, user_id)
+
+async def save_auto_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Guarda el post automático en la base de datos."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        await query.answer("No hay un post para guardar.", show_alert=True)
+        return
+    
+    state = post_creation_state[user_id]
+    
+    # Validar que tenga lo mínimo necesario
+    if not state["text"]:
+        await query.answer("❌ Debes añadir texto al post.", show_alert=True)
+        return
         
-    elif current_step == "waiting_for_edit_button_text":
-        # Editar texto de un botón existente
-        button_index = state.get("editing_button_index")
-        if button_index is not None and 0 <= button_index < len(state["buttons"]):
-            state["buttons"][button_index]["text"] = update.message.text
+    if not state["selected_channels"]:
+        await query.answer("❌ Debes seleccionar al menos un canal.", show_alert=True)
+        return
+    
+    try:
+        # Preparar datos del post
+        post_data = {
+            "post_id": state["post_id"],
+            "text": state["text"],
+            "image": state["image"],
+            "buttons": state["buttons"],
+            "channels": state["selected_channels"],
+            "schedule": state["schedule"],
+            "created_by": user_id,
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # Guardar en la base de datos
+        if db.save_auto_post(post_data):
+            # Limpiar estado
+            del post_creation_state[user_id]
             
-            # Limpiar estado de edición
-            state["current_step"] = "text"
-            del state["editing_button_index"]
+            await query.edit_message_text(
+                "✅ Post guardado correctamente.\n\n"
+                "El post se publicará automáticamente según la programación establecida.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Volver al Menú", callback_data="admin_menu")
+                ]])
+            )
+        else:
+            await query.answer("❌ Error al guardar el post.", show_alert=True)
             
-            # Confirmar y mostrar menú de botones
-            await update.message.reply_text("✅ Texto del botón actualizado.")
-            await show_post_creation_menu(update.message, user_id)
+    except Exception as e:
+        logger.error(f"Error al guardar post automático: {e}")
+        await query.answer("❌ Error al guardar el post.", show_alert=True)
 
 async def configure_post_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Configura la programación del post."""
@@ -2723,6 +2856,9 @@ async def handle_schedule_actions(update: Update, context: ContextTypes.DEFAULT_
         logger.error(f"Error en handle_schedule_actions: {e}")
         await query.answer("Error al procesar la acción", show_alert=True)
 
+
+
+
 async def handle_button_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja las acciones relacionadas con los botones del post."""
     query = update.callback_query
@@ -2735,108 +2871,83 @@ async def handle_button_actions(update: Update, context: ContextTypes.DEFAULT_TY
     state = post_creation_state[user_id]
     callback_data = query.data
     
-    # Añadir botón con URL
-    if callback_data == "post_btn_add_url":
-        state["current_step"] = "waiting_for_button_text"
-        state["button_type"] = "url"
-        await query.edit_message_text(
-            "Por favor, envía el texto que deseas mostrar en el botón:",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
-            ]])
-        )
-    
-    # Añadir botón con callback
-    elif callback_data == "post_btn_add_cb":
-        state["current_step"] = "waiting_for_button_text"
-        state["button_type"] = "callback"
-        await query.edit_message_text(
-            "Por favor, envía el texto que deseas mostrar en el botón:",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
-            ]])
-        )
-    
-    # Editar botón existente
-    elif callback_data == "post_btn_edit":
-        if not state["buttons"]:
-            await query.answer("No hay botones para editar.", show_alert=True)
-            return
+    try:
+        # Añadir botón con URL
+        if callback_data == "post_btn_add_url":
+            state["current_step"] = "waiting_for_button_text"
+            state["button_type"] = "url"
+            await query.edit_message_text(
+                "Por favor, envía el texto que deseas mostrar en el botón:",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
+                ]])
+            )
         
-        keyboard = []
-        for i, button in enumerate(state["buttons"]):
-            keyboard.append([InlineKeyboardButton(
-                f"Editar: {button['text']}", 
-                callback_data=f"post_btn_edit_{i}"
-            )])
+        # Añadir botón con callback
+        elif callback_data == "post_btn_add_cb":
+            state["current_step"] = "waiting_for_button_text"
+            state["button_type"] = "callback"
+            await query.edit_message_text(
+                "Por favor, envía el texto que deseas mostrar en el botón:",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
+                ]])
+            )
         
-        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_btn_back")])
-        await query.edit_message_text(
-            "Selecciona el botón que deseas editar:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        # Cancelar acción de botones
+        elif callback_data == "post_btn_cancel":
+            state["current_step"] = "text"
+            await show_post_creation_menu(query, user_id)
+        
+        # Volver al menú de botones
+        elif callback_data == "post_btn_back":
+            await show_button_menu(update, context)
+            
+    except Exception as e:
+        logger.error(f"Error en handle_button_actions: {e}")
+        await query.answer("Error al procesar la acción", show_alert=True)
+
+async def show_button_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Muestra el menú de gestión de botones."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    state = post_creation_state[user_id]
     
-    # Eliminar botón
-    elif callback_data == "post_btn_delete":
-        if not state["buttons"]:
-            await query.answer("No hay botones para eliminar.", show_alert=True)
-            return
-        
-        keyboard = []
-        for i, button in enumerate(state["buttons"]):
-            keyboard.append([InlineKeyboardButton(
-                f"Eliminar: {button['text']}", 
-                callback_data=f"post_btn_delete_{i}"
-            )])
-        
-        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_btn_back")])
-        await query.edit_message_text(
-            "Selecciona el botón que deseas eliminar:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    # Confirmar eliminación de botón
-    elif callback_data.startswith("post_btn_delete_"):
-        try:
-            button_index = int(callback_data.split("_")[-1])
-            if 0 <= button_index < len(state["buttons"]):
-                deleted_button = state["buttons"].pop(button_index)
-                await query.answer(f"Botón '{deleted_button['text']}' eliminado.")
-                await handle_post_buttons(update, context)
+    message = "<b>🔘 Gestión de Botones</b>\n\n"
+    if state["buttons"]:
+        message += "Botones actuales:\n"
+        for i, btn in enumerate(state["buttons"], 1):
+            if "url" in btn:
+                message += f"{i}. {btn['text']} → {btn['url']}\n"
             else:
-                await query.answer("Índice de botón inválido.", show_alert=True)
-        except (ValueError, IndexError):
-            await query.answer("Error al eliminar el botón.", show_alert=True)
-    
-    # Iniciar edición de botón específico
-    elif callback_data.startswith("post_btn_edit_"):
-        try:
-            button_index = int(callback_data.split("_")[-1])
-            if 0 <= button_index < len(state["buttons"]):
-                state["current_step"] = "waiting_for_edit_button_text"
-                state["editing_button_index"] = button_index
-                await query.edit_message_text(
-                    "Por favor, envía el nuevo texto para el botón:",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
-                    ]])
-                )
-            else:
-                await query.answer("Índice de botón inválido.", show_alert=True)
-        except (ValueError, IndexError):
-            await query.answer("Error al editar el botón.", show_alert=True)
-    
-    # Cancelar acción de botones
-    elif callback_data == "post_btn_cancel":
-        state["current_step"] = "text"
-        await handle_post_buttons(update, context)
-    
-    # Volver al menú de botones
-    elif callback_data == "post_btn_back":
-        await handle_post_buttons(update, context)
-    
+                message += f"{i}. {btn['text']} → callback: {btn['callback_data']}\n"
     else:
-        await query.answer("Acción no reconocida.", show_alert=True)
+        message += "No hay botones configurados.\n"
+    
+    message += "\nSelecciona una acción:"
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("🔗 Añadir Botón URL", callback_data="post_btn_add_url"),
+            InlineKeyboardButton("📲 Añadir Botón Callback", callback_data="post_btn_add_cb")
+        ],
+        [
+            InlineKeyboardButton("✏️ Editar Botón", callback_data="post_btn_edit"),
+            InlineKeyboardButton("❌ Eliminar Botón", callback_data="post_btn_delete")
+        ],
+        [InlineKeyboardButton("🔙 Volver", callback_data="post_cancel_input")]
+    ]
+    
+    try:
+        await query.edit_message_text(
+            message,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except telegram.error.BadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"Error mostrando menú de botones: {e}")
+
 
 async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja la configuración de horarios del post."""
@@ -2894,6 +3005,27 @@ async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_
             await query.answer("Error al procesar la solicitud", show_alert=True)
         except:
             pass
+
+async def process_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Procesa la entrada de texto para el post."""
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        return
+        
+    state = post_creation_state[user_id]
+    
+    if state["current_step"] == "waiting_for_text":
+        # Guardar el texto
+        state["text"] = update.message.text
+        state["current_step"] = "text"
+        
+        # Confirmar y mostrar menú
+        await update.message.reply_text(
+            "✅ Texto guardado correctamente.\n"
+            f"Longitud: {len(state['text'])} caracteres"
+        )
+        await show_post_creation_menu(update.message, user_id)
 
 async def return_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Vuelve al menú principal de creación de post."""
@@ -4774,6 +4906,23 @@ async def delete_scheduled_post(context: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode=ParseMode.HTML
     )
     
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja todos los mensajes recibidos."""
+    user_id = update.effective_user.id
+    
+    # Si no es admin o no hay estado de creación, ignorar
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        return
+        
+    state = post_creation_state[user_id]
+    current_step = state["current_step"]
+    
+    # Procesar entrada según el paso actual
+    if current_step == "waiting_for_text":
+        await process_text_input(update, context)
+    elif current_step in ["waiting_for_button_text", "waiting_for_button_url", "waiting_for_button_callback"]:
+        await process_button_input(update, context)    
+    
 async def load_scheduled_posts(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Carga y reprograma los posts existentes."""
     posts = db.get_post_config()
@@ -4848,7 +4997,9 @@ def main() -> None:
     application.add_handler(MessageHandler(
         filters.TEXT & filters.ChatType.PRIVATE & ~filters.COMMAND,
         handle_text_input_router
-    ))    
+    ))
+        
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))    
     
         # Manejar mensajes de texto y fotos del administrador
     application.add_handler(MessageHandler(
