@@ -2062,18 +2062,6 @@ async def handle_post_configuration(update: Update, context: ContextTypes.DEFAUL
     
     await query.answer("Esta función aún no está implementada.", show_alert=True)
 
-async def load_scheduled_posts(application):
-    """Carga y reprograma los posts existentes."""
-    posts = db.get_post_config()
-    
-    for post in posts:
-        if post.get("status") == "scheduled":
-            try:
-                await schedule_post_publication(application, post)
-                logger.info(f"Loaded and scheduled post {post['post_id']}")
-            except Exception as e:
-                logger.error(f"Error loading post {post['post_id']}: {e}")
-
 async def handle_text_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Enruta las entradas de texto a la función adecuada según el estado del usuario."""
     user_id = update.effective_user.id
@@ -4261,14 +4249,17 @@ async def delete_scheduled_post(context: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode=ParseMode.HTML
     )
     
-async def load_scheduled_posts(application):
+async def load_scheduled_posts(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Carga y reprograma los posts existentes."""
     posts = db.get_post_config()
     
     for post in posts:
         if post.get("status") == "scheduled":
-            await schedule_post_publication(application, post)
-            logger.info(f"Loaded and scheduled post {post['post_id']}")    
+            try:
+                await schedule_post_publication(context, post)
+                logger.info(f"Loaded and scheduled post {post['post_id']}")
+            except Exception as e:
+                logger.error(f"Error loading post {post['post_id']}: {e}")  
 
 # Función principal
 def main() -> None:
@@ -4345,8 +4336,8 @@ def main() -> None:
         process_post_image
     ))
     
-    # Cargar y programar posts existentes
-    asyncio.create_task(load_scheduled_posts(application))
+    # Programar la carga de posts cuando el bot inicie
+    application.job_queue.run_once(load_scheduled_posts, 1)  # Ejecutar después de 1 segundo
     
     # Manejar todos los mensajes
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_message))
