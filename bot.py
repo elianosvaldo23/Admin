@@ -2605,47 +2605,120 @@ async def configure_post_schedule(update: Update, context: ContextTypes.DEFAULT_
     state = post_creation_state[user_id]
     schedule = state["schedule"]
     
-    # Preparar mensaje
-    message = "<b>⏰ Programación del Post</b>\n\n"
-    message += f"Hora: <b>{schedule['hour']:02d}:{schedule['minute']:02d}</b>\n"
-    
-    if schedule['daily']:
-        message += "Frecuencia: <b>Diario</b>\n"
-    else:
-        days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-        selected_days = [days[i] for i in schedule['days']]
-        message += f"Días: <b>{', '.join(selected_days)}</b>\n"
-    
-    message += f"Duración: <b>{schedule['duration']} horas</b>\n\n"
-    message += "Configura cuándo se publicará el post y por cuánto tiempo."
-    
-    # Crear teclado con opciones
-    keyboard = [
-        [
-            InlineKeyboardButton("🕒 Cambiar Hora", callback_data="post_sched_hour"),
-            InlineKeyboardButton("🕐 Cambiar Minutos", callback_data="post_sched_minute")
-        ],
-        [
-            InlineKeyboardButton(
-                "📅 Modo: " + ("Diario" if schedule['daily'] else "Días específicos"), 
-                callback_data="post_sched_toggle_daily"
+    try:
+        # Preparar mensaje
+        message = "<b>⏰ Programación del Post</b>\n\n"
+        message += f"Hora: <b>{schedule['hour']:02d}:{schedule['minute']:02d}</b>\n"
+        
+        if schedule['daily']:
+            message += "Frecuencia: <b>Diario</b>\n"
+        else:
+            days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+            selected_days = [days[i] for i in schedule['days']]
+            message += f"Días: <b>{', '.join(selected_days)}</b>\n"
+        
+        message += f"Duración: <b>{schedule['duration']} horas</b>\n\n"
+        message += "Configura cuándo se publicará el post y por cuánto tiempo."
+        
+        # Crear teclado con opciones
+        keyboard = [
+            [
+                InlineKeyboardButton("🕒 Cambiar Hora", callback_data="post_sched_hour"),
+                InlineKeyboardButton("🕐 Cambiar Minutos", callback_data="post_sched_minute")
+            ],
+            [
+                InlineKeyboardButton(
+                    "📅 Modo: " + ("Diario" if schedule['daily'] else "Días específicos"), 
+                    callback_data="post_sched_toggle_daily"
+                )
+            ],
+            [
+                InlineKeyboardButton("📆 Seleccionar Días", callback_data="post_sched_days"),
+                InlineKeyboardButton("⏱️ Duración", callback_data="post_sched_duration")
+            ],
+            [InlineKeyboardButton("🔙 Volver", callback_data="post_cancel_input")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Enviar o actualizar el mensaje
+        try:
+            await query.edit_message_text(
+                message,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup
             )
-        ],
-        [
-            InlineKeyboardButton("📆 Seleccionar Días", callback_data="post_sched_days"),
-            InlineKeyboardButton("⏱️ Duración", callback_data="post_sched_duration")
-        ],
-        [InlineKeyboardButton("🔙 Volver", callback_data="post_cancel_input")]
-    ]
+        except telegram.error.BadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                raise
+    except Exception as e:
+        logger.error(f"Error en configure_post_schedule: {e}")
+        await query.answer("Error al configurar el horario", show_alert=True)
+
+async def handle_schedule_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, callback_data: str, schedule: dict) -> None:
+    """Maneja las acciones específicas del horario."""
+    query = update.callback_query
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    # Enviar o actualizar el mensaje
-    await query.edit_message_text(
-        message,
-        parse_mode=ParseMode.HTML,
-        reply_markup=reply_markup
-    )
+    try:
+        # Configuración de hora específica
+        if callback_data.startswith("post_sched_set_hour_"):
+            hour = int(callback_data.split("_")[-1])
+            if 0 <= hour < 24:
+                schedule['hour'] = hour
+                await query.answer(f"Hora configurada: {hour:02d}:00")
+                await configure_post_schedule(update, context)
+            else:
+                await query.answer("Hora inválida", show_alert=True)
+                
+        # Configuración de minutos específicos
+        elif callback_data.startswith("post_sched_set_minute_"):
+            minute = int(callback_data.split("_")[-1])
+            if minute in [0, 15, 30, 45]:
+                schedule['minute'] = minute
+                await query.answer(f"Minutos configurados: {minute:02d}")
+                await configure_post_schedule(update, context)
+            else:
+                await query.answer("Minutos inválidos", show_alert=True)
+                
+        # Toggle de modo diario
+        elif callback_data == "post_sched_toggle_daily":
+            schedule['daily'] = not schedule['daily']
+            await query.answer(f"Modo {'diario' if schedule['daily'] else 'días específicos'} activado")
+            await configure_post_schedule(update, context)
+            
+        # Toggle de días específicos
+        elif callback_data.startswith("post_sched_toggle_day_"):
+            day_index = int(callback_data.split("_")[-1])
+            if 0 <= day_index <= 6:
+                if day_index in schedule['days']:
+                    schedule['days'].remove(day_index)
+                else:
+                    schedule['days'].append(day_index)
+                
+                if not schedule['days']:
+                    schedule['days'].append(datetime.now().weekday())
+                
+                schedule['days'].sort()
+                await query.answer("Día actualizado")
+                await handle_schedule_setting(update, context)
+            else:
+                await query.answer("Día inválido", show_alert=True)
+                
+        # Configuración de duración
+        elif callback_data.startswith("post_sched_set_duration_"):
+            duration = int(callback_data.split("_")[-1])
+            if duration in [6, 12, 24, 48, 72]:
+                schedule['duration'] = duration
+                await query.answer(f"Duración configurada: {duration} horas")
+                await configure_post_schedule(update, context)
+            else:
+                await query.answer("Duración inválida", show_alert=True)
+                
+    except ValueError:
+        await query.answer("Valor inválido", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error en handle_schedule_actions: {e}")
+        await query.answer("Error al procesar la acción", show_alert=True)
 
 async def handle_button_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja las acciones relacionadas con los botones del post."""
@@ -2762,6 +2835,7 @@ async def handle_button_actions(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         await query.answer("Acción no reconocida.", show_alert=True)
 
+
 async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja la configuración de horarios del post."""
     query = update.callback_query
@@ -2776,19 +2850,65 @@ async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_
     callback_data = query.data
     
     try:
-        # Configuración de hora
-        if callback_data == "post_sched_hour":
+        # Configuración de minutos
+        if callback_data == "post_sched_minute":
             keyboard = []
             row = []
             
-            for hour in range(24):
+            for minute in [0, 15, 30, 45]:
                 btn = InlineKeyboardButton(
-                    f"{hour:02d}" + ("✓" if hour == schedule['hour'] else ""), 
-                    callback_data=f"post_sched_set_hour_{hour}"
+                    f"{minute:02d}" + ("✓" if minute == schedule['minute'] else ""), 
+                    callback_data=f"post_sched_set_minute_{minute}"
+                )
+                row.append(btn)
+            
+            keyboard.append(row)
+            keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
+            
+            await query.edit_message_text(
+                "<b>⏰ Selecciona los minutos para el post</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+            
+        # Seleccionar días específicos
+        elif callback_data == "post_sched_days":
+            days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+            keyboard = []
+            
+            for i, day in enumerate(days):
+                is_selected = i in schedule['days']
+                prefix = "✅" if is_selected else "❌"
+                keyboard.append([InlineKeyboardButton(
+                    f"{prefix} {day}", 
+                    callback_data=f"post_sched_toggle_day_{i}"
+                )])
+            
+            keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
+            
+            await query.edit_message_text(
+                "<b>📆 Selecciona los días para publicar el post</b>\n\n"
+                "Marca los días en que se publicará el post:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+            
+        # Cambiar duración
+        elif callback_data == "post_sched_duration":
+            durations = [6, 12, 24, 48, 72]
+            keyboard = []
+            row = []
+            
+            for duration in durations:
+                btn = InlineKeyboardButton(
+                    f"{duration}h" + ("✓" if duration == schedule['duration'] else ""), 
+                    callback_data=f"post_sched_set_duration_{duration}"
                 )
                 row.append(btn)
                 
-                if (hour + 1) % 6 == 0:
+                if len(row) == 3:
                     keyboard.append(row)
                     row = []
             
@@ -2798,96 +2918,40 @@ async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_
             keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
             
             await query.edit_message_text(
-                "<b>⏰ Selecciona la hora para el post</b>",
+                "<b>⏱️ Selecciona la duración del post</b>\n\n"
+                "¿Durante cuántas horas estará publicado el post?",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+            return
             
-        # Manejar configuración de hora específica
-        elif callback_data.startswith("post_sched_set_hour_"):
-            try:
-                hour = int(callback_data.split("_")[-1])
-                if 0 <= hour < 24:
-                    schedule['hour'] = hour
-                    await query.answer(f"Hora configurada: {hour:02d}:00")
-                    await configure_post_schedule(update, context)
-                else:
-                    await query.answer("Hora inválida", show_alert=True)
-            except (ValueError, IndexError):
-                await query.answer("Error en el formato de hora", show_alert=True)
-        
-        # Manejar toggle de días específicos
-        elif callback_data.startswith("post_sched_toggle_day_"):
-            try:
-                day_index = int(callback_data.split("_")[-1])
-                if 0 <= day_index <= 6:
-                    if day_index in schedule['days']:
-                        schedule['days'].remove(day_index)
-                        try:
-                            await query.answer("Día deseleccionado")
-                        except telegram.error.BadRequest as e:
-                            if "query is too old" in str(e).lower():
-                                # Si la consulta es muy antigua, actualizamos silenciosamente
-                                pass
-                            else:
-                                raise
-                    else:
-                        schedule['days'].append(day_index)
-                        try:
-                            await query.answer("Día seleccionado")
-                        except telegram.error.BadRequest as e:
-                            if "query is too old" in str(e).lower():
-                                # Si la consulta es muy antigua, actualizamos silenciosamente
-                                pass
-                            else:
-                                raise
-                    
-                    # Si no hay días seleccionados, seleccionar al menos uno (hoy)
-                    if not schedule['days']:
-                        today = datetime.now().weekday()
-                        schedule['days'].append(today)
-                    
-                    # Ordenar los días
-                    schedule['days'].sort()
-                    
-                    try:
-                        await handle_schedule_setting(update, context)
-                    except telegram.error.BadRequest as e:
-                        if "message is not modified" not in str(e).lower():
-                            raise
-                else:
-                    await query.answer("Día inválido", show_alert=True)
-            except (ValueError, IndexError):
-                await query.answer("Error en el formato del día", show_alert=True)
-        
-        
-        # Manejar configuración de duración
-        elif callback_data.startswith("post_sched_set_duration_"):
-            try:
-                duration = int(callback_data.split("_")[-1])
-                if duration in [6, 12, 24, 48, 72]:
-                    schedule['duration'] = duration
-                    await query.answer(f"Duración configurada: {duration} horas")
-                    await configure_post_schedule(update, context)
-                else:
-                    await query.answer("Duración inválida", show_alert=True)
-            except (ValueError, IndexError):
-                await query.answer("Error en el formato de duración", show_alert=True)
+        # Volver al menú principal
+        elif callback_data == "post_cancel_input":
+            state["current_step"] = "text"
+            await show_post_creation_menu(query, user_id)
+            return
         
         # Volver al menú de programación
         elif callback_data == "post_sched":
             await configure_post_schedule(update, context)
-        
-        else:
-            await query.answer("Esta opción aún no está implementada", show_alert=True)
+            return
             
+        # Manejar otras acciones específicas
+        await handle_schedule_actions(update, context, callback_data, schedule)
+        
     except telegram.error.BadRequest as e:
         if "message is not modified" not in str(e).lower():
             logger.error(f"Error en handle_schedule_setting: {e}")
-            await query.answer("Error al procesar la solicitud", show_alert=True)
+        try:
+            await query.answer("Acción procesada", show_alert=False)
+        except:
+            pass
     except Exception as e:
         logger.error(f"Error inesperado en handle_schedule_setting: {e}")
-        await query.answer("Error al procesar la solicitud", show_alert=True)
+        try:
+            await query.answer("Error al procesar la solicitud", show_alert=True)
+        except:
+            pass
 
 async def preview_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Muestra una vista previa del post."""
