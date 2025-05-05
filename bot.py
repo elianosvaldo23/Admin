@@ -48,6 +48,9 @@ user_last_activity = {}  # Para seguimiento de actividad
 user_editing_state = {}  # Para seguimiento de estados de edición
 scheduled_posts = {}  # Para posts programados
 
+# Estado global para manejar la creación de posts automáticos
+post_creation_state = {}
+
 # Cargar configuración desde MongoDB
 def load_config_from_db():
     """Carga la configuración desde la base de datos MongoDB."""
@@ -1073,6 +1076,7 @@ async def handle_delete_channel(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         await query.answer("Error al eliminar el canal.")
 
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja callbacks de botones."""
     query = update.callback_query
@@ -1352,7 +1356,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         submission_id = callback_data.split("_")[2]
         
         if submission_id not in pending_submissions:
-            # Corregido: Ahora muestra el estado real de la solicitud
             await query.edit_message_text(
                 "Esta solicitud ya no está disponible o ha sido procesada. Si fue aprobada, deberías haber recibido una notificación."
             )
@@ -1375,6 +1378,51 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             ])
         )
         
+        return
+    
+    # Sistema de post automáticos
+    if callback_data == "admin_auto_post":
+        if user_id != ADMIN_ID:
+            await query.answer("Solo el administrador principal puede acceder a esta función.", show_alert=True)
+            return
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("➕ Nuevo Post", callback_data="create_auto_post"),
+                InlineKeyboardButton("📋 Lista de Posts", callback_data="list_auto_posts")
+            ],
+            [
+                InlineKeyboardButton("📊 Estadísticas", callback_data="post_stats"),
+                InlineKeyboardButton("⚙️ Configuración", callback_data="post_config")
+            ],
+            [InlineKeyboardButton("🔙 Volver", callback_data="admin_panel")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "<b>📅 Sistema de Publicación Automática</b>\n\n"
+            "Administra los posts automáticos para tus canales. Puedes crear nuevos posts, "
+            "ver los existentes, consultar estadísticas y configurar el sistema.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+        
+        return
+    
+    # Crear nuevo post automático
+    if callback_data == "create_auto_post":
+        await create_auto_post(update, context)
+        return
+    
+    # Lista de posts automáticos
+    if callback_data == "list_auto_posts":
+        await list_auto_posts(update, context)
+        return
+    
+    # Configuración de posts
+    if callback_data.startswith("post_"):
+        await handle_post_configuration(update, context)
         return
     
     # Manejar visualización de categorías
@@ -1549,96 +1597,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         return
     
-    # Manejar configuración de posts automáticos
-    if callback_data == "admin_auto_post":
-        if user_id != ADMIN_ID:
-            await query.answer("Solo el administrador principal puede acceder a esta función.", show_alert=True)
-            return
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("➕ Nuevo Post", callback_data="create_auto_post"),
-                InlineKeyboardButton("📋 Lista de Posts", callback_data="list_auto_posts")
-            ],
-            [
-                InlineKeyboardButton("📊 Estadísticas", callback_data="post_stats"),
-                InlineKeyboardButton("⚙️ Configuración", callback_data="post_config")
-            ],
-            [InlineKeyboardButton("🔙 Volver", callback_data="admin_panel")]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "<b>📅 Sistema de Publicación Automática</b>\n\n"
-            "Administra los posts automáticos para tus canales. Puedes crear nuevos posts, "
-            "ver los existentes, consultar estadísticas y configurar el sistema.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup
-        )
-        
-        return
-    
-    # Manejar creación de posts automáticos
-    if callback_data == "create_auto_post":
-        if user_id != ADMIN_ID:
-            await query.answer("Solo el administrador principal puede crear posts.", show_alert=True)
-            return
-        
-        # Iniciar el proceso de creación de post
-        post_id = f"post_{int(time.time())}"
-        context.user_data["creating_post"] = {
-            "id": post_id,
-            "text": None,
-            "image": None,
-            "buttons": [],
-            "channels": [],
-            "schedule": {
-                "hour": 12,
-                "minute": 0,
-                "daily": False,
-                "days": [0, 1, 2, 3, 4, 5, 6],  # Todos los días de la semana
-                "duration": 24  # Horas que estará publicado
-            }
-        }
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("📝 Añadir Texto", callback_data="post_add_text"),
-                InlineKeyboardButton("🖼 Añadir Imagen", callback_data="post_add_image")
-            ],
-            [
-                InlineKeyboardButton("🔗 Añadir Botones", callback_data="post_add_buttons"),
-                InlineKeyboardButton("📊 Seleccionar Canales", callback_data="post_select_channels")
-            ],
-            [
-                InlineKeyboardButton("⏰ Programar", callback_data="post_schedule"),
-                InlineKeyboardButton("✅ Guardar Post", callback_data="post_save")
-            ],
-            [InlineKeyboardButton("❌ Cancelar", callback_data="admin_auto_post")]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "<b>🆕 Crear Nuevo Post Automático</b>\n\n"
-            "Configure las opciones del post:\n"
-            "- Añada texto y/o imagen\n"
-            "- Configure botones inline\n"
-            "- Seleccione los canales donde publicar\n"
-            "- Establezca horario de publicación\n\n"
-            "<b>Estado actual:</b>\n"
-            "Texto: ❌ No configurado\n"
-            "Imagen: ❌ No configurada\n"
-            "Botones: ❌ No configurados\n"
-            "Canales: ❌ No seleccionados\n"
-            "Horario: ⏰ Por defecto (12:00 PM, publicado 24h)",
-            parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup
-        )
-        
-        return
-    
     # Manejar volver al menú principal
     if callback_data == "back_to_main":
         keyboard = [
@@ -1769,6 +1727,1485 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         
         return
+        
+    # Manejar ver una solicitud específica
+    if callback_data.startswith("view_submission_"):
+        if user_id != ADMIN_ID:
+            await query.answer("Solo el administrador principal puede ver las solicitudes.", show_alert=True)
+            return
+        
+        submission_id = callback_data[15:]
+        
+        if submission_id not in pending_submissions:
+            await query.edit_message_text(
+                "Esta solicitud ya no está disponible o ha sido procesada.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Volver a Solicitudes", callback_data="admin_submissions")]
+                ])
+            )
+            return
+        
+        submission = pending_submissions[submission_id]
+        
+        # Mostrar detalles de la solicitud
+        submission_text = (
+            f"📋 <b>Detalles de la Solicitud</b>\n\n"
+            f"<b>Canal:</b> {html.escape(submission['channel_name'])}\n"
+            f"<b>Username:</b> @{html.escape(submission['channel_username'])}\n"
+            f"<b>ID:</b> {html.escape(submission['channel_id'])}\n"
+            f"<b>Categoría:</b> {submission['category']}\n"
+            f"<b>Solicitado por:</b> {html.escape(submission['user_name'])}\n"
+        )
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Aprobar", callback_data=f"approve_{submission_id}"),
+                InlineKeyboardButton("❌ Rechazar", callback_data=f"reject_{submission_id}")
+            ],
+            [
+                InlineKeyboardButton("🔍 Ver Canal", url=f"https://t.me/{submission['channel_username']}"),
+                InlineKeyboardButton("📋 Ver Categoría", url=CATEGORIES[submission['category']])
+            ],
+            [InlineKeyboardButton("🔙 Volver a Solicitudes", callback_data="admin_submissions")]
+        ]
+        
+        await query.edit_message_text(
+            submission_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+        return
+    
+    # Manejar botones de ayuda
+    if callback_data.startswith("help_"):
+        help_type = callback_data[5:]
+        help_texts = {
+            "basic": (
+                "<b>📝 Comandos Básicos</b>\n\n"
+                "/start - Iniciar el bot\n"
+                "/help - Mostrar ayuda\n"
+                "/categories - Ver categorías disponibles\n"
+                "/stats - Ver tus estadísticas"
+            ),
+            "mod": (
+                "<b>👮 Comandos de Moderación</b>\n\n"
+                "/warn - Advertir a un usuario\n"
+                "/unwarn - Quitar advertencia a un usuario\n"
+                "/mute - Silenciar a un usuario\n"
+                "/unmute - Quitar silencio a un usuario\n"
+                "/ban - Banear a un usuario\n"
+                "/unban - Desbanear a un usuario"
+            ),
+            "stats": (
+                "<b>📊 Comandos de Estadísticas</b>\n\n"
+                "/stats - Ver tus estadísticas en el grupo\n"
+                "También puedes ver estadísticas globales desde el menú principal."
+            ),
+            "channels": (
+                "<b>🔄 Comandos de Canales</b>\n\n"
+                "Para añadir un canal, envía un mensaje con el formato:\n"
+                "<code>#Categoría\nNombre del Canal\n@username_canal\nID -100xxxxxxxxxx\n@admin bot añadido</code>\n\n"
+                "Para ver las categorías disponibles usa /categories"
+            ),
+            "config": (
+                "<b>⚙️ Comandos de Configuración</b>\n\n"
+                "/setwelcome - Establecer mensaje de bienvenida\n"
+                "/addbutton - Añadir botón al mensaje de bienvenida\n"
+                "/removebutton - Eliminar botón del mensaje de bienvenida\n"
+                "/showwelcome - Mostrar configuración actual\n"
+                "/resetwelcome - Restablecer configuración por defecto"
+            ),
+            "fun": (
+                "<b>🎮 Comandos de Diversión</b>\n\n"
+                "Próximamente se añadirán comandos de diversión."
+            )
+        }
+        
+        if help_type in help_texts:
+            await query.edit_message_text(
+                help_texts[help_type],
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Volver", callback_data="help_back")]
+                ])
+            )
+        elif help_type == "back":
+            # Volver al menú de ayuda principal
+            keyboard = [
+                [
+                    InlineKeyboardButton("📝 Comandos Básicos", callback_data="help_basic"),
+                    InlineKeyboardButton("👮 Comandos de Moderación", callback_data="help_mod")
+                ],
+                [
+                    InlineKeyboardButton("📊 Estadísticas", callback_data="help_stats"),
+                    InlineKeyboardButton("🔄 Canales", callback_data="help_channels")
+                ],
+                [
+                    InlineKeyboardButton("⚙️ Configuración", callback_data="help_config"),
+                    InlineKeyboardButton("🎮 Diversión", callback_data="help_fun")
+                ],
+                [InlineKeyboardButton("🔙 Menú Principal", callback_data="back_to_main")]
+            ]
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                "<b>🤖 Centro de Ayuda</b>\n\n"
+                "Selecciona una categoría para ver los comandos disponibles:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup
+            )
+        
+        return
+
+    # Manejar otros callbacks que no estén definidos explícitamente
+    await query.answer("Esta función aún no está implementada.", show_alert=True)
+
+async def create_auto_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inicia el proceso de creación de un post automático."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID:
+        await query.answer("Solo el administrador principal puede crear posts.", show_alert=True)
+        return
+    
+    # Iniciar el proceso de creación de post
+    post_id = f"post_{int(time.time())}"
+    post_creation_state[user_id] = {
+        "post_id": post_id,
+        "text": "",
+        "image": None,
+        "buttons": [],
+        "selected_channels": [],
+        "schedule": {
+            "hour": 12,
+            "minute": 0,
+            "daily": False,
+            "days": [0, 1, 2, 3, 4, 5, 6],  # Todos los días de la semana
+            "duration": 24  # Horas que estará publicado
+        },
+        "current_step": "text"
+    }
+    
+    # Mostrar opciones iniciales
+    await show_post_creation_menu(query, user_id)
+
+async def show_post_creation_menu(query, user_id):
+    """Muestra el menú de creación de post."""
+    state = post_creation_state[user_id]
+    current_step = state["current_step"]
+    
+    # Construir el mensaje según el estado actual
+    message = "<b>🆕 Crear Nuevo Post Automático</b>\n\n"
+    
+    # Mostrar resumen del post
+    message += "<b>Estado actual:</b>\n"
+    
+    # Texto
+    if state["text"]:
+        message += f"✅ Texto: {len(state['text'])} caracteres\n"
+    else:
+        message += "❌ Texto: No configurado\n"
+    
+    # Imagen
+    if state["image"]:
+        message += "✅ Imagen: Configurada\n"
+    else:
+        message += "❌ Imagen: No configurada\n"
+    
+    # Botones
+    if state["buttons"]:
+        message += f"✅ Botones: {len(state['buttons'])} configurados\n"
+    else:
+        message += "❌ Botones: No configurados\n"
+    
+    # Canales
+    if state["selected_channels"]:
+        message += f"✅ Canales: {len(state['selected_channels'])} seleccionados\n"
+    else:
+        message += "❌ Canales: No seleccionados\n"
+    
+    # Programación
+    schedule = state["schedule"]
+    message += f"⏰ Horario: {schedule['hour']:02d}:{schedule['minute']:02d}, "
+    message += f"{'Diario' if schedule['daily'] else 'Días selectos'}, "
+    message += f"Duración: {schedule['duration']}h\n\n"
+    
+    # Instrucciones según el paso actual
+    if current_step == "text":
+        message += "Por favor, selecciona qué acción realizar a continuación:"
+    elif current_step == "waiting_for_text":
+        message += "Por favor, envía el texto que deseas incluir en el post."
+    elif current_step == "waiting_for_image":
+        message += "Por favor, envía la imagen que deseas incluir en el post."
+    elif current_step == "channels":
+        message += "Selecciona los canales donde se publicará el post."
+    elif current_step == "schedule":
+        message += "Configura el horario de publicación del post."
+    
+    # Crear teclado según el paso actual
+    keyboard = []
+    
+    # Siempre mostrar acciones principales, a menos que esté esperando una entrada
+    if not current_step.startswith("waiting_for_"):
+        keyboard = [
+            [
+                InlineKeyboardButton("📝 Añadir/Editar Texto", callback_data="post_add_text"),
+                InlineKeyboardButton("🖼 Añadir/Editar Imagen", callback_data="post_add_image")
+            ],
+            [
+                InlineKeyboardButton("🔗 Añadir/Editar Botones", callback_data="post_add_buttons"),
+                InlineKeyboardButton("📢 Seleccionar Canales", callback_data="post_select_channels")
+            ],
+            [
+                InlineKeyboardButton("⏰ Programar Horario", callback_data="post_schedule"),
+                InlineKeyboardButton("👁 Vista Previa", callback_data="post_preview")
+            ],
+            [
+                InlineKeyboardButton("✅ Guardar Post", callback_data="post_save"),
+                InlineKeyboardButton("❌ Cancelar", callback_data="admin_auto_post")
+            ]
+        ]
+    else:
+        # Si está esperando entrada, solo mostrar botón de cancelar
+        keyboard = [
+            [InlineKeyboardButton("❌ Cancelar", callback_data="post_cancel_input")]
+        ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Enviar o editar el mensaje según corresponda
+    await query.edit_message_text(
+        message,
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_markup
+    )
+
+async def handle_post_configuration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja los callbacks relacionados con la configuración de posts."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID:
+        await query.answer("Solo el administrador principal puede configurar posts.", show_alert=True)
+        return
+    
+    callback_data = query.data
+    
+    # Verificar si hay un proceso de creación activo
+    if user_id not in post_creation_state and not callback_data == "create_auto_post":
+        await query.answer("No hay un proceso de creación de post activo.", show_alert=True)
+        await query.edit_message_text(
+            "El proceso de creación de post ha expirado. Inicia uno nuevo.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Nuevo Post", callback_data="create_auto_post")],
+                [InlineKeyboardButton("🔙 Volver", callback_data="admin_auto_post")]
+            ])
+        )
+        return
+    
+    # Manejar según el callback específico
+    if callback_data == "post_add_text":
+        post_creation_state[user_id]["current_step"] = "waiting_for_text"
+        await show_post_creation_menu(query, user_id)
+        await query.answer("Envía el texto para el post")
+        return
+    
+    elif callback_data == "post_add_image":
+        post_creation_state[user_id]["current_step"] = "waiting_for_image"
+        await show_post_creation_menu(query, user_id)
+        await query.answer("Envía la imagen para el post")
+        return
+    
+    elif callback_data == "post_cancel_input":
+        # Cancelar la espera de entrada
+        post_creation_state[user_id]["current_step"] = "text"  # Volver al menú principal
+        await show_post_creation_menu(query, user_id)
+        return
+    
+    elif callback_data == "post_add_buttons":
+        await handle_post_buttons(update, context)
+        return
+    
+    elif callback_data == "post_select_channels":
+        await select_post_channels(update, context)
+        return
+    
+    elif callback_data == "post_schedule":
+        await configure_post_schedule(update, context)
+        return
+    
+    elif callback_data == "post_preview":
+        await preview_post(update, context)
+        return
+    
+    elif callback_data == "post_save":
+        await save_post(update, context)
+        return
+    
+    # Manejar callbacks específicos para botones
+    elif callback_data.startswith("post_btn_"):
+        await handle_button_actions(update, context)
+        return
+    
+    # Manejar callbacks específicos para canales
+    elif callback_data.startswith("post_chan_"):
+        await handle_channel_selection(update, context)
+        return
+    
+    # Manejar callbacks específicos para programación
+    elif callback_data.startswith("post_sched_"):
+        await handle_schedule_setting(update, context)
+        return
+    
+    await query.answer("Esta función aún no está implementada.", show_alert=True)
+
+async def load_scheduled_posts(application):
+    """Carga y reprograma los posts existentes."""
+    posts = db.get_post_config()
+    
+    for post in posts:
+        if post.get("status") == "scheduled":
+            try:
+                await schedule_post_publication(application, post)
+                logger.info(f"Loaded and scheduled post {post['post_id']}")
+            except Exception as e:
+                logger.error(f"Error loading post {post['post_id']}: {e}")
+
+async def handle_text_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Enruta las entradas de texto a la función adecuada según el estado del usuario."""
+    user_id = update.effective_user.id
+    
+    # Manejar textos para posts
+    if user_id in post_creation_state:
+        state = post_creation_state[user_id]
+        current_step = state.get("current_step", "")
+        
+        if current_step == "waiting_for_text":
+            await process_post_text(update, context)
+            return
+        elif current_step == "waiting_for_button_text" or current_step == "waiting_for_button_url" or current_step == "waiting_for_button_callback" or current_step == "waiting_for_edit_button_text":
+            await process_button_input(update, context)
+            return
+    
+    # Manejar textos para editar canales
+    if user_id in user_editing_state:
+        await handle_edit_input(update, context)
+        return
+    
+    # Manejar motivos de rechazo del administrador
+    if user_id == ADMIN_ID and user_id in admin_rejecting:
+        await handle_rejection_reason(update, context)
+        return
+    
+    # Manejar otras entradas de texto
+    await process_channel_submission(update, context)
+
+async def edit_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja el comando /edit para editar un canal."""
+    user_id = update.effective_user.id
+    
+    # Verificar si el usuario es administrador
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("Solo el administrador principal puede usar este comando.")
+        return
+    
+    # Verificar argumentos
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text(
+            "Por favor, proporciona el ID del canal que deseas editar.\n"
+            "Ejemplo: /edit -1001234567890"
+        )
+        return
+    
+    channel_id = context.args[0]
+    
+    # Buscar información del canal
+    channels = db.get_approved_channels()
+    target_channel = None
+    
+    for channel in channels:
+        if channel["channel_id"] == channel_id:
+            target_channel = channel
+            break
+    
+    if not target_channel:
+        await update.message.reply_text("Canal no encontrado.")
+        return
+    
+    # Mostrar opciones de edición
+    keyboard = [
+        [
+            InlineKeyboardButton("📝 Cambiar Nombre", callback_data=f"change_name_{channel_id}"),
+            InlineKeyboardButton("📝 Modificar Enlace", callback_data=f"change_link_{channel_id}")
+        ],
+        [InlineKeyboardButton("🗑️ Eliminar Canal", callback_data=f"delete_channel_{channel_id}")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    message = (
+        f"✏️ Editar Canal\n\n"
+        f"🏷 {target_channel['channel_name']}\n"
+        f"🆔 {target_channel['channel_id']}\n"
+        f"🔗 https://t.me/{target_channel['channel_username']}\n"
+        f"📂 Categoría: {target_channel['category']}\n"
+    )
+    
+    await update.message.reply_text(message, reply_markup=reply_markup)
+
+async def process_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Procesa el texto enviado para el post."""
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        return
+    
+    state = post_creation_state[user_id]
+    
+    if state["current_step"] != "waiting_for_text":
+        return
+    
+    # Guardar el texto
+    state["text"] = update.message.text
+    state["current_step"] = "text"  # Volver al menú principal
+    
+    # Enviar confirmación
+    await update.message.reply_text("✅ Texto guardado correctamente.")
+    
+    # Enviar menú actualizado
+    keyboard = [
+        [
+            InlineKeyboardButton("📝 Añadir/Editar Texto", callback_data="post_add_text"),
+            InlineKeyboardButton("🖼 Añadir/Editar Imagen", callback_data="post_add_image")
+        ],
+        [
+            InlineKeyboardButton("🔗 Añadir/Editar Botones", callback_data="post_add_buttons"),
+            InlineKeyboardButton("📢 Seleccionar Canales", callback_data="post_select_channels")
+        ],
+        [
+            InlineKeyboardButton("⏰ Programar Horario", callback_data="post_schedule"),
+            InlineKeyboardButton("👁 Vista Previa", callback_data="post_preview")
+        ],
+        [
+            InlineKeyboardButton("✅ Guardar Post", callback_data="post_save"),
+            InlineKeyboardButton("❌ Cancelar", callback_data="admin_auto_post")
+        ]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    message = "<b>🆕 Crear Nuevo Post Automático</b>\n\n"
+    message += "<b>Estado actual:</b>\n"
+    message += f"✅ Texto: {len(state['text'])} caracteres\n"
+    
+    # Añadir información sobre otros componentes
+    if state["image"]:
+        message += "✅ Imagen: Configurada\n"
+    else:
+        message += "❌ Imagen: No configurada\n"
+    
+    if state["buttons"]:
+        message += f"✅ Botones: {len(state['buttons'])} configurados\n"
+    else:
+        message += "❌ Botones: No configurados\n"
+    
+    if state["selected_channels"]:
+        message += f"✅ Canales: {len(state['selected_channels'])} seleccionados\n"
+    else:
+        message += "❌ Canales: No seleccionados\n"
+    
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=message,
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_markup
+    )
+
+async def process_post_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Procesa la imagen enviada para el post."""
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        return
+    
+    state = post_creation_state[user_id]
+    
+    if state["current_step"] != "waiting_for_image":
+        return
+    
+    # Verificar si hay una imagen
+    if not update.message.photo:
+        await update.message.reply_text("❌ Por favor, envía una imagen válida.")
+        return
+    
+    # Guardar la imagen (el último elemento es la versión de mayor resolución)
+    state["image"] = update.message.photo[-1].file_id
+    state["current_step"] = "text"  # Volver al menú principal
+    
+    # Enviar confirmación
+    await update.message.reply_text("✅ Imagen guardada correctamente.")
+    
+    # Enviar menú actualizado
+    await context.bot.send_message(
+        chat_id=user_id,
+        text="<b>🆕 Crear Nuevo Post Automático</b>\n\n"
+             "<b>Estado actual:</b>\n"
+             f"{'✅ Texto: ' + str(len(state['text'])) + ' caracteres' if state['text'] else '❌ Texto: No configurado'}\n"
+             "✅ Imagen: Configurada\n"
+             f"{'✅ Botones: ' + str(len(state['buttons'])) + ' configurados' if state['buttons'] else '❌ Botones: No configurados'}\n"
+             f"{'✅ Canales: ' + str(len(state['selected_channels'])) + ' seleccionados' if state['selected_channels'] else '❌ Canales: No seleccionados'}\n",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📝 Añadir/Editar Texto", callback_data="post_add_text"),
+                InlineKeyboardButton("🖼 Añadir/Editar Imagen", callback_data="post_add_image")
+            ],
+            [
+                InlineKeyboardButton("🔗 Añadir/Editar Botones", callback_data="post_add_buttons"),
+                InlineKeyboardButton("📢 Seleccionar Canales", callback_data="post_select_channels")
+            ],
+            [
+                InlineKeyboardButton("⏰ Programar Horario", callback_data="post_schedule"),
+                InlineKeyboardButton("👁 Vista Previa", callback_data="post_preview")
+            ],
+            [
+                InlineKeyboardButton("✅ Guardar Post", callback_data="post_save"),
+                InlineKeyboardButton("❌ Cancelar", callback_data="admin_auto_post")
+            ]
+        ])
+    )
+
+async def handle_post_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja la configuración de botones para el post."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        await query.answer("No hay un proceso de creación de post activo.", show_alert=True)
+        return
+    
+    state = post_creation_state[user_id]
+    
+    # Mostrar los botones actuales y opciones para añadir/editar
+    message = "<b>🔗 Configuración de Botones</b>\n\n"
+    
+    if not state["buttons"]:
+        message += "No hay botones configurados aún.\n\n"
+    else:
+        message += "<b>Botones actuales:</b>\n\n"
+        for i, btn in enumerate(state["buttons"], 1):
+            if "url" in btn:
+                message += f"{i}. {btn['text']} -> {btn['url']}\n"
+            elif "callback_data" in btn:
+                message += f"{i}. {btn['text']} -> Callback: {btn['callback_data']}\n"
+    
+    message += "\nSelecciona una opción:"
+    
+    # Crear teclado con opciones
+    keyboard = [
+        [
+            InlineKeyboardButton("➕ Añadir Botón URL", callback_data="post_btn_add_url"),
+            InlineKeyboardButton("➕ Añadir Botón Callback", callback_data="post_btn_add_cb")
+        ],
+        [
+            InlineKeyboardButton("✏️ Editar Botón", callback_data="post_btn_edit"),
+            InlineKeyboardButton("🗑️ Eliminar Botón", callback_data="post_btn_delete")
+        ],
+        [InlineKeyboardButton("🔙 Volver", callback_data="post_btn_back")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        message,
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_markup
+    )
+
+async def select_post_channels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Muestra la lista de canales para seleccionar."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        await query.answer("No hay un proceso de creación de post activo.", show_alert=True)
+        return
+    
+    state = post_creation_state[user_id]
+    
+    # Obtener canales disponibles para publicación automática
+    channels = db.get_auto_post_channels()
+    
+    if not channels:
+        await query.edit_message_text(
+            "<b>📢 Selección de Canales</b>\n\n"
+            "No hay canales configurados para publicación automática.\n\n"
+            "Utiliza el comando /A para añadir canales.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Volver", callback_data="post_cancel_input")]
+            ])
+        )
+        return
+    
+    # Preparar mensaje
+    message = "<b>📢 Selección de Canales</b>\n\n"
+    message += "Selecciona los canales donde deseas publicar este post:\n\n"
+    
+    # Crear teclado con canales
+    keyboard = []
+    selected_ids = [ch['channel_id'] for ch in state["selected_channels"]]
+    
+    for channel in channels:
+        # Verificar si el canal está seleccionado
+        is_selected = channel['channel_id'] in selected_ids
+        prefix = "✅ " if is_selected else "❌ "
+        
+        keyboard.append([InlineKeyboardButton(
+            f"{prefix}{channel['channel_name']}",
+            callback_data=f"post_chan_toggle_{channel['channel_id']}"
+        )])
+    
+    # Añadir botones de acción
+    keyboard.append([
+        InlineKeyboardButton("✅ Seleccionar Todos", callback_data="post_chan_select_all"),
+        InlineKeyboardButton("❌ Deseleccionar Todos", callback_data="post_chan_deselect_all")
+    ])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_cancel_input")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Enviar o actualizar el mensaje
+    await query.edit_message_text(
+        message,
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_markup
+    )
+
+async def handle_channel_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja las acciones de selección de canales."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        await query.answer("No hay un proceso de creación de post activo.", show_alert=True)
+        return
+    
+    state = post_creation_state[user_id]
+    callback_data = query.data
+    
+    # Obtener todos los canales disponibles
+    all_channels = db.get_auto_post_channels()
+    
+    # Manejar selección/deselección de un canal
+    if callback_data.startswith("post_chan_toggle_"):
+        channel_id = callback_data[16:]
+        
+        # Buscar el canal en los seleccionados
+        selected_ids = [ch['channel_id'] for ch in state["selected_channels"]]
+        
+        if channel_id in selected_ids:
+            # Deseleccionar canal
+            state["selected_channels"] = [ch for ch in state["selected_channels"] if ch['channel_id'] != channel_id]
+            await query.answer("Canal deseleccionado")
+        else:
+            # Seleccionar canal (buscar información completa)
+            for channel in all_channels:
+                if channel['channel_id'] == channel_id:
+                    state["selected_channels"].append(channel)
+                    await query.answer("Canal seleccionado")
+                    break
+    
+    # Manejar selección de todos los canales
+    elif callback_data == "post_chan_select_all":
+        state["selected_channels"] = all_channels.copy()
+        await query.answer("Todos los canales seleccionados")
+    
+    # Manejar deselección de todos los canales
+    elif callback_data == "post_chan_deselect_all":
+        state["selected_channels"] = []
+        await query.answer("Se han deseleccionado todos los canales")
+    
+    # Actualizar la lista de canales
+    await select_post_channels(update, context)
+
+async def configure_post_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Configura la programación del post."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        await query.answer("No hay un proceso de creación de post activo.", show_alert=True)
+        return
+    
+    state = post_creation_state[user_id]
+    schedule = state["schedule"]
+    
+    # Preparar mensaje
+    message = "<b>⏰ Programación del Post</b>\n\n"
+    message += f"Hora: <b>{schedule['hour']:02d}:{schedule['minute']:02d}</b>\n"
+    
+    if schedule['daily']:
+        message += "Frecuencia: <b>Diario</b>\n"
+    else:
+        days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+        selected_days = [days[i] for i in schedule['days']]
+        message += f"Días: <b>{', '.join(selected_days)}</b>\n"
+    
+    message += f"Duración: <b>{schedule['duration']} horas</b>\n\n"
+    message += "Configura cuándo se publicará el post y por cuánto tiempo."
+    
+    # Crear teclado con opciones
+    keyboard = [
+        [
+            InlineKeyboardButton("🕒 Cambiar Hora", callback_data="post_sched_hour"),
+            InlineKeyboardButton("🕐 Cambiar Minutos", callback_data="post_sched_minute")
+        ],
+        [
+            InlineKeyboardButton(
+                "📅 Modo: " + ("Diario" if schedule['daily'] else "Días específicos"), 
+                callback_data="post_sched_toggle_daily"
+            )
+        ],
+        [
+            InlineKeyboardButton("📆 Seleccionar Días", callback_data="post_sched_days"),
+            InlineKeyboardButton("⏱️ Duración", callback_data="post_sched_duration")
+        ],
+        [InlineKeyboardButton("🔙 Volver", callback_data="post_cancel_input")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Enviar o actualizar el mensaje
+    await query.edit_message_text(
+        message,
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_markup
+    )
+
+async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja la configuración de horarios del post."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        await query.answer("No hay un proceso de creación de post activo.", show_alert=True)
+        return
+    
+    state = post_creation_state[user_id]
+    schedule = state["schedule"]
+    callback_data = query.data
+    
+    # Configuración de hora
+    if callback_data == "post_sched_hour":
+        # Crear selector de hora (0-23)
+        keyboard = []
+        row = []
+        
+        for hour in range(24):
+            btn = InlineKeyboardButton(
+                f"{hour:02d}" + ("✓" if hour == schedule['hour'] else ""), 
+                callback_data=f"post_sched_set_hour_{hour}"
+            )
+            row.append(btn)
+            
+            if (hour + 1) % 6 == 0:
+                keyboard.append(row)
+                row = []
+        
+        if row:
+            keyboard.append(row)
+        
+        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
+        
+        await query.edit_message_text(
+            "<b>⏰ Selecciona la hora para el post</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+    # Configuración de minutos
+    elif callback_data == "post_sched_minute":
+        # Crear selector de minutos (0, 15, 30, 45)
+        keyboard = []
+        row = []
+        
+        for minute in [0, 15, 30, 45]:
+            btn = InlineKeyboardButton(
+                f"{minute:02d}" + ("✓" if minute == schedule['minute'] else ""), 
+                callback_data=f"post_sched_set_minute_{minute}"
+            )
+            row.append(btn)
+        
+        keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
+        
+        await query.edit_message_text(
+            "<b>⏰ Selecciona los minutos para el post</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    # Alternar modo diario/días específicos
+    elif callback_data == "post_sched_toggle_daily":
+        schedule['daily'] = not schedule['daily']
+        await query.answer(f"Modo {'diario' if schedule['daily'] else 'días específicos'} activado")
+        await configure_post_schedule(update, context)
+    
+    # Seleccionar días específicos
+    elif callback_data == "post_sched_days":
+        days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+        keyboard = []
+        
+        for i, day in enumerate(days):
+            is_selected = i in schedule['days']
+            prefix = "✅" if is_selected else "❌"
+            keyboard.append([InlineKeyboardButton(
+                f"{prefix} {day}", 
+                callback_data=f"post_sched_toggle_day_{i}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
+        
+        await query.edit_message_text(
+            "<b>📆 Selecciona los días para publicar el post</b>\n\n"
+            "Marca los días en que se publicará el post:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    # Cambiar duración
+    elif callback_data == "post_sched_duration":
+        durations = [6, 12, 24, 48, 72]
+        keyboard = []
+        row = []
+        
+        for duration in durations:
+            btn = InlineKeyboardButton(
+                f"{duration}h" + ("✓" if duration == schedule['duration'] else ""), 
+                callback_data=f"post_sched_set_duration_{duration}"
+            )
+            row.append(btn)
+            
+            if len(row) == 3:
+                keyboard.append(row)
+                row = []
+        
+        if row:
+            keyboard.append(row)
+        
+        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
+        
+        await query.edit_message_text(
+            "<b>⏱️ Selecciona la duración del post</b>\n\n"
+            "¿Durante cuántas horas estará publicado el post?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    # Manejar configuración de hora específica
+    elif callback_data.startswith("post_sched_set_hour_"):
+        hour = int(callback_data[18:])
+        schedule['hour'] = hour
+        await query.answer(f"Hora configurada: {hour:02d}:00")
+        await configure_post_schedule(update, context)
+    
+    # Manejar configuración de minutos específicos
+    elif callback_data.startswith("post_sched_set_minute_"):
+        minute = int(callback_data[20:])
+        schedule['minute'] = minute
+        await query.answer(f"Minutos configurados: {minute:02d}")
+        await configure_post_schedule(update, context)
+    
+    # Manejar toggle de días específicos
+    elif callback_data.startswith("post_sched_toggle_day_"):
+        day_index = int(callback_data[19:])
+        
+        if day_index in schedule['days']:
+            schedule['days'].remove(day_index)
+            await query.answer(f"Día deseleccionado")
+        else:
+            schedule['days'].append(day_index)
+            await query.answer(f"Día seleccionado")
+        
+        # Si no hay días seleccionados, seleccionar al menos uno (hoy)
+        if not schedule['days']:
+            today = datetime.now().weekday()
+            schedule['days'].append(today)
+        
+        # Ordenar los días
+        schedule['days'].sort()
+        
+        # Volver a mostrar el selector de días
+        await handle_schedule_setting(update, context)
+    
+    # Manejar configuración de duración
+    elif callback_data.startswith("post_sched_set_duration_"):
+        duration = int(callback_data[22:])
+        schedule['duration'] = duration
+        await query.answer(f"Duración configurada: {duration} horas")
+        await configure_post_schedule(update, context)
+    
+    # Volver al menú de programación
+    elif callback_data == "post_sched":
+        await configure_post_schedule(update, context)
+    
+    else:
+        await query.answer("Esta opción aún no está implementada", show_alert=True)
+
+async def preview_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Muestra una vista previa del post."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        await query.answer("No hay un proceso de creación de post activo.", show_alert=True)
+        return
+    
+    state = post_creation_state[user_id]
+    
+    # Verificar si hay contenido mínimo para mostrar
+    if not state["text"] and not state["image"]:
+        await query.answer("Necesitas configurar al menos texto o imagen para el post.", show_alert=True)
+        return
+    
+    # Preparar mensaje para indicar que es una vista previa
+    await query.edit_message_text(
+        "<b>👁 Vista Previa del Post</b>\n\n"
+        "Generando vista previa...",
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Crear botones de preview si hay configurados
+    reply_markup = None
+    if state["buttons"]:
+        keyboard = []
+        row = []
+        for i, btn in enumerate(state["buttons"]):
+            if "url" in btn:
+                button = InlineKeyboardButton(btn["text"], url=btn["url"])
+            else:
+                button = InlineKeyboardButton(btn["text"], callback_data=f"preview_btn_{i}")
+            
+            row.append(button)
+            
+            # Crear nueva fila cada 2 botones o al final
+            if (i + 1) % 2 == 0 or i == len(state["buttons"]) - 1:
+                keyboard.append(row)
+                row = []
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Enviar vista previa según el contenido
+    try:
+        if state["image"] and state["text"]:
+            # Enviar imagen con pie de texto
+            await context.bot.send_photo(
+                chat_id=user_id,
+                photo=state["image"],
+                caption=state["text"],
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup
+            )
+        elif state["image"]:
+            # Enviar solo imagen
+            await context.bot.send_photo(
+                chat_id=user_id,
+                photo=state["image"],
+                reply_markup=reply_markup
+            )
+        else:
+            # Enviar solo texto
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=state["text"],
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup
+            )
+    except Exception as e:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"❌ Error al generar la vista previa: {str(e)}\n\n"
+                 f"Por favor, verifica el formato del texto y los botones.",
+            parse_mode=ParseMode.HTML
+        )
+    
+    # Volver al menú de creación
+    keyboard = [
+        [
+            InlineKeyboardButton("📝 Añadir/Editar Texto", callback_data="post_add_text"),
+            InlineKeyboardButton("🖼 Añadir/Editar Imagen", callback_data="post_add_image")
+        ],
+        [
+            InlineKeyboardButton("🔗 Añadir/Editar Botones", callback_data="post_add_buttons"),
+            InlineKeyboardButton("📢 Seleccionar Canales", callback_data="post_select_channels")
+        ],
+        [
+            InlineKeyboardButton("⏰ Programar Horario", callback_data="post_schedule"),
+            InlineKeyboardButton("👁 Vista Previa", callback_data="post_preview")
+        ],
+        [
+            InlineKeyboardButton("✅ Guardar Post", callback_data="post_save"),
+            InlineKeyboardButton("❌ Cancelar", callback_data="admin_auto_post")
+        ]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await context.bot.send_message(
+        chat_id=user_id,
+        text="<b>🆕 Crear Nuevo Post Automático</b>\n\n"
+             "Vista previa generada correctamente. ¿Deseas realizar algún cambio?",
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_markup
+    )
+
+async def save_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Guarda el post configurado en la base de datos."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        await query.answer("No hay un proceso de creación de post activo.", show_alert=True)
+        return
+    
+    state = post_creation_state[user_id]
+    
+    # Validar contenido mínimo
+    if not state["text"] and not state["image"]:
+        await query.answer("Necesitas configurar al menos texto o imagen para el post.", show_alert=True)
+        return
+    
+    if not state["selected_channels"]:
+        await query.answer("Necesitas seleccionar al menos un canal para publicar.", show_alert=True)
+        return
+    
+    # Preparar datos del post
+    post_data = {
+        "post_id": state["post_id"],
+        "text": state["text"],
+        "image": state["image"],
+        "buttons": state["buttons"],
+        "channels": state["selected_channels"],
+        "schedule": state["schedule"],
+        "created_by": user_id,
+        "created_at": datetime.now().isoformat(),
+        "status": "scheduled"
+    }
+    
+    # Guardar en la base de datos
+    try:
+        success = db.save_post_config(state["post_id"], post_data)
+        
+        if success:
+            # Programar la publicación
+            await schedule_post_publication(context, post_data)
+            
+            await query.edit_message_text(
+                "<b>✅ Post Guardado Exitosamente</b>\n\n"
+                f"ID del post: <code>{state['post_id']}</code>\n"
+                f"Canales: {len(state['selected_channels'])}\n"
+                f"Programado para: {state['schedule']['hour']:02d}:{state['schedule']['minute']:02d}\n\n"
+                f"El post ha sido guardado y programado correctamente.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Volver", callback_data="admin_auto_post")]
+                ])
+            )
+            
+            # Limpiar el estado de creación
+            if user_id in post_creation_state:
+                del post_creation_state[user_id]
+            
+        else:
+            await query.edit_message_text(
+                "❌ Error al guardar el post en la base de datos.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Reintentar", callback_data="post_save")],
+                    [InlineKeyboardButton("🔙 Volver", callback_data="admin_auto_post")]
+                ])
+            )
+    except Exception as e:
+        logger.error(f"Error saving post: {e}")
+        await query.edit_message_text(
+            f"❌ Error al guardar el post: {str(e)}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Reintentar", callback_data="post_save")],
+                [InlineKeyboardButton("🔙 Volver", callback_data="admin_auto_post")]
+            ])
+        )
+
+async def schedule_post_publication(context: ContextTypes.DEFAULT_TYPE, post_data):
+    """Programa la publicación del post."""
+    post_id = post_data["post_id"]
+    schedule = post_data["schedule"]
+    
+    # Calcular próxima hora de publicación
+    now = datetime.now()
+    
+    # Crear una fecha para hoy con la hora programada
+    scheduled_time = datetime(
+        now.year, now.month, now.day,
+        schedule["hour"], schedule["minute"], 0
+    )
+    
+    # Si ya pasó la hora programada, programar para mañana
+    if scheduled_time < now:
+        scheduled_time += timedelta(days=1)
+    
+    # Si hay días específicos, ajustar a la próxima fecha válida
+    if not schedule["daily"]:
+        # Continuar añadiendo días hasta encontrar un día válido
+        while scheduled_time.weekday() not in schedule["days"]:
+            scheduled_time += timedelta(days=1)
+    
+    # Calcular delay en segundos
+    delay = (scheduled_time - now).total_seconds()
+    
+    # Programar la tarea
+    context.job_queue.run_once(
+        publish_scheduled_post,
+        delay,
+        data={"post_id": post_id},
+        name=f"publish_post_{post_id}"
+    )
+    
+    logger.info(f"Post {post_id} scheduled for {scheduled_time}")
+
+async def list_auto_posts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lista todos los posts automáticos."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID:
+        await query.answer("Solo el administrador principal puede ver la lista de posts.", show_alert=True)
+        return
+    
+    # Obtener todos los posts configurados
+    posts = db.get_post_config()
+    
+    if not posts:
+        await query.edit_message_text(
+            "<b>📋 Lista de Posts Automáticos</b>\n\n"
+            "No hay posts configurados actualmente.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Nuevo Post", callback_data="create_auto_post")],
+                [InlineKeyboardButton("🔙 Volver", callback_data="admin_auto_post")]
+            ])
+        )
+        return
+    
+    # Construir lista de posts
+    message = "<b>📋 Lista de Posts Automáticos</b>\n\n"
+    
+    keyboard = []
+    for i, post in enumerate(posts, 1):
+        # Formatear fecha de creación
+        created_at = datetime.fromisoformat(post.get("created_at", ""))
+        created_str = created_at.strftime("%d/%m/%Y %H:%M")
+        
+        # Obtener detalles de programación
+        schedule = post.get("schedule", {})
+        time_str = f"{schedule.get('hour', 0):02d}:{schedule.get('minute', 0):02d}"
+        
+        # Contar canales
+        channels_count = len(post.get("channels", []))
+        
+        message += f"{i}. <b>Post {post['post_id']}</b>\n"
+        message += f"   📅 Creado: {created_str}\n"
+        message += f"   ⏰ Hora: {time_str}\n"
+        message += f"   📢 Canales: {channels_count}\n"
+        message += f"   📊 Estado: {post.get('status', 'programado')}\n\n"
+        
+        # Añadir botón para administrar este post
+        keyboard.append([InlineKeyboardButton(
+            f"Administrar Post #{i}", 
+            callback_data=f"manage_post_{post['post_id']}"
+        )])
+    
+    keyboard.append([
+        InlineKeyboardButton("➕ Nuevo Post", callback_data="create_auto_post"),
+        InlineKeyboardButton("🔙 Volver", callback_data="admin_auto_post")
+    ])
+    
+    await query.edit_message_text(
+        message,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def publish_scheduled_post(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Publica un post programado."""
+    job = context.job
+    post_id = job.data["post_id"]
+    
+    # Obtener configuración del post
+    post_config = db.get_post_config(post_id)
+    if not post_config:
+        logger.error(f"Post configuration not found for id: {post_id}")
+        return
+    
+    # Obtener canales a publicar
+    channels = post_config.get("channels", [])
+    if not channels:
+        logger.error(f"No channels found for post: {post_id}")
+        return
+    
+    # Preparar mensaje
+    text = post_config.get("text", "")
+    image = post_config.get("image")
+    buttons = post_config.get("buttons", [])
+    
+    # Preparar teclado si hay botones
+    reply_markup = None
+    if buttons:
+        keyboard = []
+        row = []
+        for i, btn in enumerate(buttons):
+            if "url" in btn:
+                button = InlineKeyboardButton(btn["text"], url=btn["url"])
+            elif "callback_data" in btn:
+                button = InlineKeyboardButton(btn["text"], callback_data=btn["callback_data"])
+            else:
+                continue
+                
+            row.append(button)
+            
+            # Crear nueva fila cada 2 botones o al final
+            if (i + 1) % 2 == 0 or i == len(buttons) - 1:
+                keyboard.append(row)
+                row = []
+        
+        if keyboard:
+            reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Estadísticas de publicación
+    publish_stats = {
+        "success": 0,
+        "failed": 0,
+        "channels": []
+    }
+    
+    # Publicar en cada canal
+    for channel in channels:
+        channel_id = channel["channel_id"]
+        try:
+            sent_message = None
+            
+            # Enviar mensaje según el contenido
+            if image and text:
+                # Mensaje con texto e imagen
+                sent_message = await context.bot.send_photo(
+                    chat_id=channel_id,
+                    photo=image,
+                    caption=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup
+                )
+            elif image:
+                # Solo imagen
+                sent_message = await context.bot.send_photo(
+                    chat_id=channel_id,
+                    photo=image,
+                    reply_markup=reply_markup
+                )
+            else:
+                # Solo texto
+                sent_message = await context.bot.send_message(
+                    chat_id=channel_id,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup
+                )
+            
+            # Registrar estadísticas de éxito
+            publish_stats["success"] += 1
+            publish_stats["channels"].append({
+                "channel_id": channel_id,
+                "channel_name": channel["channel_name"],
+                "status": "success",
+                "message_id": sent_message.message_id if sent_message else None
+            })
+            
+            # Actualizar estadísticas del post
+            db.update_post_stats(
+                post_id, 
+                channel_id,
+                "published",
+                message_id=sent_message.message_id if sent_message else None
+            )
+            
+        except Exception as e:
+            logger.error(f"Error publishing post to channel {channel_id}: {e}")
+            
+            # Registrar estadísticas de error
+            publish_stats["failed"] += 1
+            publish_stats["channels"].append({
+                "channel_id": channel_id,
+                "channel_name": channel["channel_name"],
+                "status": "failed",
+                "error": str(e)
+            })
+            
+            # Actualizar estadísticas del post
+            db.update_post_stats(post_id, channel_id, "failed")
+    
+    # Enviar informe al administrador
+    report_message = (
+        f"<b>📊 Informe de Publicación Automática</b>\n\n"
+        f"Post ID: <code>{post_id}</code>\n"
+        f"Canales exitosos: {publish_stats['success']}\n"
+        f"Canales fallidos: {publish_stats['failed']}\n\n"
+    )
+    
+    if publish_stats["channels"]:
+        report_message += "<b>Detalles:</b>\n\n"
+        
+        for channel_stat in publish_stats["channels"]:
+            if channel_stat["status"] == "success":
+                report_message += f"✅ {html.escape(channel_stat['channel_name'])}\n"
+            else:
+                report_message += f"❌ {html.escape(channel_stat['channel_name'])}: {html.escape(channel_stat['error'])}\n"
+    
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=report_message,
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Programar eliminación si es necesaria
+    if post_config.get("schedule", {}).get("duration"):
+        duration_hours = post_config["schedule"]["duration"]
+        delete_time = datetime.now() + timedelta(hours=duration_hours)
+        
+        # Actualizar estadísticas
+        successful_channels = [ch for ch in publish_stats["channels"] if ch["status"] == "success"]
+        
+        # Programar tarea para eliminar el post
+        if successful_channels:
+            context.job_queue.run_once(
+                delete_scheduled_post,
+                delete_time,
+                data={
+                    "post_id": post_id,
+                    "channels": successful_channels
+                },
+                name=f"delete_post_{post_id}"
+            )
+    
+    # Si es publicación diaria, programar siguiente publicación
+    schedule = post_config.get("schedule", {})
+    if schedule.get("daily", False) or schedule.get("days"):
+        # Programar para el día siguiente a la misma hora
+        next_run = datetime.now() + timedelta(days=1)
+        next_run = next_run.replace(
+            hour=schedule["hour"], 
+            minute=schedule["minute"],
+            second=0,
+            microsecond=0
+        )
+        
+        # Si hay días específicos, ajustar a la próxima fecha válida
+        if not schedule.get("daily", False) and schedule.get("days", []):
+            while next_run.weekday() not in schedule["days"]:
+                next_run += timedelta(days=1)
+        
+        # Calcular delay en segundos
+        delay = (next_run - datetime.now()).total_seconds()
+        
+        # Programar la próxima publicación
+        context.job_queue.run_once(
+            publish_scheduled_post,
+            delay,
+            data={"post_id": post_id},
+            name=f"publish_post_{post_id}"
+        )
+        
+        logger.info(f"Next publication of post {post_id} scheduled for {next_run}")
+
+async def delete_scheduled_post(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Elimina los posts programados después de su duración."""
+    job = context.job
+    post_id = job.data["post_id"]
+    channels = job.data["channels"]
+    
+    # Estadísticas de eliminación
+    delete_stats = {
+        "success": 0,
+        "failed": 0,
+        "channels": []
+    }
+    
+    # Eliminar de cada canal
+    for channel_info in channels:
+        if channel_info["status"] != "success" or not channel_info.get("message_id"):
+            continue
+        
+        channel_id = channel_info["channel_id"]
+        message_id = channel_info["message_id"]
+        
+        try:
+            # Eliminar mensaje
+            await context.bot.delete_message(
+                chat_id=channel_id,
+                message_id=message_id
+            )
+            
+            # Registrar estadísticas de éxito
+            delete_stats["success"] += 1
+            delete_stats["channels"].append({
+                "channel_id": channel_id,
+                "channel_name": channel_info["channel_name"],
+                "status": "success"
+            })
+            
+            # Actualizar estadísticas del post
+            db.update_post_stats(
+                post_id, 
+                channel_id,
+                "deleted",
+                deleted_at=datetime.now().isoformat()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error deleting post from channel {channel_id}: {e}")
+            
+            # Registrar estadísticas de error
+            delete_stats["failed"] += 1
+            delete_stats["channels"].append({
+                "channel_id": channel_id,
+                "channel_name": channel_info["channel_name"],
+                "status": "failed",
+                "error": str(e)
+            })
+    
+    # Enviar informe al administrador
+    report_message = (
+        f"<b>🗑️ Informe de Eliminación Automática</b>\n\n"
+        f"Post ID: <code>{post_id}</code>\n"
+        f"Canales exitosos: {delete_stats['success']}\n"
+        f"Canales fallidos: {delete_stats['failed']}\n\n"
+    )
+    
+    if delete_stats["channels"]:
+        report_message += "<b>Detalles:</b>\n\n"
+        
+        for channel_stat in delete_stats["channels"]:
+            if channel_stat["status"] == "success":
+                report_message += f"✅ {html.escape(channel_stat['channel_name'])}\n"
+            else:
+                report_message += f"❌ {html.escape(channel_stat['channel_name'])}: {html.escape(channel_stat['error'])}\n"
+    
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=report_message,
+        parse_mode=ParseMode.HTML
+    )
 
 async def handle_rejection_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja el motivo de rechazo del administrador."""
@@ -2823,6 +4260,15 @@ async def delete_scheduled_post(context: ContextTypes.DEFAULT_TYPE) -> None:
         text=report_message,
         parse_mode=ParseMode.HTML
     )
+    
+async def load_scheduled_posts(application):
+    """Carga y reprograma los posts existentes."""
+    posts = db.get_post_config()
+    
+    for post in posts:
+        if post.get("status") == "scheduled":
+            await schedule_post_publication(application, post)
+            logger.info(f"Loaded and scheduled post {post['post_id']}")    
 
 # Función principal
 def main() -> None:
@@ -2864,6 +4310,8 @@ def main() -> None:
     application.add_handler(CommandHandler("E", delete_auto_post_channel))
     application.add_handler(CommandHandler("List", list_auto_post_channels))
     application.add_handler(CommandHandler("V", verify_auto_post_channels))
+    application.add_handler(CommandHandler("del", delete_auto_post_channel))
+    application.add_handler(CommandHandler("edit", edit_channel_cmd))
     
     # Dar bienvenida a nuevos miembros
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
@@ -2879,6 +4327,26 @@ def main() -> None:
     
     # Manejar callbacks de botones
     application.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Manejadores para creación de posts automáticos
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.ChatType.PRIVATE & ~filters.COMMAND,
+        handle_text_input_router
+    ))    
+    
+        # Manejar mensajes de texto y fotos del administrador
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.User(ADMIN_ID) & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        process_post_text
+    ))
+
+    application.add_handler(MessageHandler(
+        filters.PHOTO & filters.User(ADMIN_ID) & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        process_post_image
+    ))
+    
+    # Cargar y programar posts existentes
+    asyncio.create_task(load_scheduled_posts(application))
     
     # Manejar todos los mensajes
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_message))
