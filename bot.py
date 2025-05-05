@@ -2594,7 +2594,7 @@ async def process_button_input(update: Update, context: ContextTypes.DEFAULT_TYP
             await show_post_creation_menu(update.message, user_id)
 
 async def configure_post_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Muestra el menú principal de configuración de horario."""
+    """Configura la programación del post."""
     query = update.callback_query
     user_id = query.from_user.id
     
@@ -2639,15 +2639,14 @@ async def configure_post_schedule(update: Update, context: ContextTypes.DEFAULT_
                 InlineKeyboardButton("📆 Seleccionar Días", callback_data="post_sched_days"),
                 InlineKeyboardButton("⏱️ Duración", callback_data="post_sched_duration")
             ],
-            [InlineKeyboardButton("🔙 Volver", callback_data="post_cancel_input")]
+            # Usar el callback_data correcto para volver al menú principal
+            [InlineKeyboardButton("🔙 Volver", callback_data="back_to_menu")]
         ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
             message,
             parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         await query.answer()
         
@@ -2856,40 +2855,34 @@ async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_
     callback_data = query.data
     
     try:
-        if callback_data == "post_sched":
-            # Volver al menú de programación principal
-            await configure_post_schedule(update, context)
-            return
-            
-        elif callback_data == "post_sched_days":
-            # Mostrar selector de días
+        if callback_data == "post_sched_days":
             await show_days_selector(update, context)
             return
             
         elif callback_data.startswith("post_sched_toggle_day_"):
-            # Manejar selección de día
             await toggle_day_selection(update, context)
             return
             
         elif callback_data == "post_sched_hour":
-            # Mostrar selector de hora
             await show_hour_selector(update, context)
             return
             
         elif callback_data == "post_sched_minute":
-            # Mostrar selector de minutos
             await show_minute_selector(update, context)
             return
             
         elif callback_data == "post_sched_duration":
-            # Mostrar selector de duración
             await show_duration_selector(update, context)
             return
             
-        elif callback_data == "post_cancel_input":
-            # Volver al menú de creación de post
-            state["current_step"] = "text"
-            await show_post_creation_menu(query, user_id)
+        elif callback_data == "post_sched":
+            # Volver desde cualquier submenú al menú principal de programación
+            await configure_post_schedule(update, context)
+            return
+            
+        elif callback_data == "post_cancel_input" or callback_data == "back_to_menu":
+            # Volver al menú principal de creación de post
+            await return_to_main_menu(update, context)
             return
             
         # Manejar otras acciones específicas
@@ -2902,11 +2895,63 @@ async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_
         except:
             pass
 
-async def show_days_selector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Muestra el selector de días."""
+async def return_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Vuelve al menú principal de creación de post."""
     query = update.callback_query
     user_id = query.from_user.id
     state = post_creation_state[user_id]
+    
+    try:
+        # Actualizar estado
+        state["current_step"] = "text"
+        
+        # Preparar mensaje del menú principal
+        message = "<b>🆕 Crear Nuevo Post Automático</b>\n\n"
+        message += "<b>Estado actual:</b>\n"
+        message += f"{'✅ Texto: ' + str(len(state['text'])) + ' caracteres' if state['text'] else '❌ Texto: No configurado'}\n"
+        message += f"{'✅ Imagen: Configurada' if state['image'] else '❌ Imagen: No configurada'}\n"
+        message += f"{'✅ Botones: ' + str(len(state['buttons'])) + ' configurados' if state['buttons'] else '❌ Botones: No configurados'}\n"
+        message += f"{'✅ Canales: ' + str(len(state['selected_channels'])) + ' seleccionados' if state['selected_channels'] else '❌ Canales: No seleccionados'}\n"
+        
+        # Crear teclado del menú principal
+        keyboard = [
+            [
+                InlineKeyboardButton("📝 Añadir/Editar Texto", callback_data="post_add_text"),
+                InlineKeyboardButton("🖼 Añadir/Editar Imagen", callback_data="post_add_image")
+            ],
+            [
+                InlineKeyboardButton("🔗 Añadir/Editar Botones", callback_data="post_add_buttons"),
+                InlineKeyboardButton("📢 Seleccionar Canales", callback_data="post_select_channels")
+            ],
+            [
+                InlineKeyboardButton("⏰ Programar Horario", callback_data="post_schedule"),
+                InlineKeyboardButton("👁 Vista Previa", callback_data="post_preview")
+            ],
+            [
+                InlineKeyboardButton("✅ Guardar Post", callback_data="post_save"),
+                InlineKeyboardButton("❌ Cancelar", callback_data="admin_auto_post")
+            ]
+        ]
+        
+        await query.edit_message_text(
+            message,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        await query.answer("Volviendo al menú principal")
+        
+    except telegram.error.BadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"Error volviendo al menú principal: {e}")
+        try:
+            await query.answer()
+        except:
+            pass
+
+async def show_days_selector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Muestra el selector de días."""
+    query = update.callback_query
+    state = post_creation_state[query.from_user.id]
     schedule = state["schedule"]
     
     days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
@@ -2921,7 +2966,7 @@ async def show_days_selector(update: Update, context: ContextTypes.DEFAULT_TYPE)
             callback_data=f"post_sched_toggle_day_{i}"
         )])
     
-    # Añadir botón volver
+    # Añadir botón volver con callback_data específico
     keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
     
     try:
