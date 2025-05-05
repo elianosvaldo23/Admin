@@ -2324,55 +2324,128 @@ async def select_post_channels(update: Update, context: ContextTypes.DEFAULT_TYP
     
     state = post_creation_state[user_id]
     
-    # Obtener canales disponibles para publicación automática
-    channels = db.get_auto_post_channels()
+    try:
+        # Obtener canales disponibles para publicación automática
+        channels = db.get_auto_post_channels()
+        
+        if not channels:
+            await query.edit_message_text(
+                "<b>📢 Selección de Canales</b>\n\n"
+                "No hay canales configurados para publicación automática.\n\n"
+                "Utiliza el comando /A para añadir canales.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Volver", callback_data="post_cancel_input")]
+                ])
+            )
+            return
+        
+        # Preparar mensaje y teclado
+        message = "<b>📢 Selección de Canales</b>\n\n"
+        message += "Selecciona los canales donde deseas publicar este post:\n\n"
+        
+        # Obtener IDs de canales seleccionados
+        selected_ids = [ch['channel_id'] for ch in state["selected_channels"]]
+        
+        # Crear teclado con canales
+        keyboard = []
+        for channel in channels:
+            is_selected = channel['channel_id'] in selected_ids
+            prefix = "✅" if is_selected else "❌"
+            keyboard.append([InlineKeyboardButton(
+                f"{prefix} {channel['channel_name']}",
+                callback_data=f"post_chan_toggle_{channel['channel_id']}"
+            )])
+        
+        # Añadir botones de acción
+        keyboard.append([
+            InlineKeyboardButton("✅ Seleccionar Todos", callback_data="post_chan_select_all"),
+            InlineKeyboardButton("❌ Deseleccionar Todos", callback_data="post_chan_deselect_all")
+        ])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_cancel_input")])
+        
+        # Intentar actualizar el mensaje
+        try:
+            await query.edit_message_text(
+                message,
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except telegram.error.BadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                raise
+            await query.answer("Lista de canales actualizada")
+            
+    except Exception as e:
+        logger.error(f"Error en select_post_channels: {e}")
+        await query.answer("Error al mostrar los canales", show_alert=True)
+
+async def handle_channel_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja las acciones de selección de canales."""
+    query = update.callback_query
+    user_id = query.from_user.id
     
-    if not channels:
-        await query.edit_message_text(
-            "<b>📢 Selección de Canales</b>\n\n"
-            "No hay canales configurados para publicación automática.\n\n"
-            "Utiliza el comando /A para añadir canales.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Volver", callback_data="post_cancel_input")]
-            ])
-        )
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        await query.answer("No hay un proceso de creación de post activo.", show_alert=True)
         return
     
-    # Preparar mensaje
-    message = "<b>📢 Selección de Canales</b>\n\n"
-    message += "Selecciona los canales donde deseas publicar este post:\n\n"
+    state = post_creation_state[user_id]
+    callback_data = query.data
     
-    # Crear teclado con canales
-    keyboard = []
-    selected_ids = [ch['channel_id'] for ch in state["selected_channels"]]
-    
-    for channel in channels:
-        # Verificar si el canal está seleccionado
-        is_selected = channel['channel_id'] in selected_ids
-        prefix = "✅ " if is_selected else "❌ "
+    try:
+        # Toggle de canal individual
+        if callback_data.startswith("post_chan_toggle_"):
+            channel_id = callback_data[16:]
+            selected_ids = [ch['channel_id'] for ch in state["selected_channels"]]
+            changed = False
+            
+            if channel_id in selected_ids:
+                # Deseleccionar canal
+                state["selected_channels"] = [ch for ch in state["selected_channels"] if ch['channel_id'] != channel_id]
+                changed = True
+                await query.answer("Canal deseleccionado")
+            else:
+                # Buscar el canal en la lista completa
+                all_channels = db.get_auto_post_channels()
+                target_channel = next((ch for ch in all_channels if ch['channel_id'] == channel_id), None)
+                
+                if target_channel:
+                    state["selected_channels"].append(target_channel)
+                    changed = True
+                    await query.answer("Canal seleccionado")
+            
+            if changed:
+                await select_post_channels(update, context)
         
-        keyboard.append([InlineKeyboardButton(
-            f"{prefix}{channel['channel_name']}",
-            callback_data=f"post_chan_toggle_{channel['channel_id']}"
-        )])
-    
-    # Añadir botones de acción
-    keyboard.append([
-        InlineKeyboardButton("✅ Seleccionar Todos", callback_data="post_chan_select_all"),
-        InlineKeyboardButton("❌ Deseleccionar Todos", callback_data="post_chan_deselect_all")
-    ])
-    
-    keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_cancel_input")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    # Enviar o actualizar el mensaje
-    await query.edit_message_text(
-        message,
-        parse_mode=ParseMode.HTML,
-        reply_markup=reply_markup
-    )
+        # Seleccionar todos los canales
+        elif callback_data == "post_chan_select_all":
+            old_count = len(state["selected_channels"])
+            state["selected_channels"] = db.get_auto_post_channels()
+            
+            if len(state["selected_channels"]) != old_count:
+                await select_post_channels(update, context)
+            await query.answer("Todos los canales seleccionados")
+        
+        # Deseleccionar todos los canales
+        elif callback_data == "post_chan_deselect_all":
+            if state["selected_channels"]:
+                state["selected_channels"] = []
+                await select_post_channels(update, context)
+            await query.answer("Todos los canales deseleccionados")
+        
+        # Volver al menú principal
+        elif callback_data == "post_cancel_input":
+            state["current_step"] = "text"
+            await show_post_creation_menu(query, user_id)
+        
+    except telegram.error.BadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"Error en handle_channel_selection: {e}")
+            await query.answer("Error al procesar la selección", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error inesperado en handle_channel_selection: {e}")
+        await query.answer("Error al procesar la selección", show_alert=True)
 
 async def handle_channel_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja las acciones de selección de canales."""
