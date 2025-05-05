@@ -2386,40 +2386,138 @@ async def handle_channel_selection(update: Update, context: ContextTypes.DEFAULT
     state = post_creation_state[user_id]
     callback_data = query.data
     
-    # Obtener todos los canales disponibles
-    all_channels = db.get_auto_post_channels()
-    
-    # Manejar selección/deselección de un canal
-    if callback_data.startswith("post_chan_toggle_"):
-        channel_id = callback_data[16:]
+    try:
+        # Toggle de canal individual
+        if callback_data.startswith("post_chan_toggle_"):
+            channel_id = callback_data[16:]
+            selected_ids = [ch['channel_id'] for ch in state["selected_channels"]]
+            
+            # Buscar el canal en la lista completa
+            all_channels = db.get_auto_post_channels()
+            target_channel = next((ch for ch in all_channels if ch['channel_id'] == channel_id), None)
+            
+            if channel_id in selected_ids:
+                # Deseleccionar canal
+                state["selected_channels"] = [ch for ch in state["selected_channels"] if ch['channel_id'] != channel_id]
+                await query.answer("Canal deseleccionado")
+            elif target_channel:
+                # Seleccionar canal
+                state["selected_channels"].append(target_channel)
+                await query.answer("Canal seleccionado")
+            
+            await select_post_channels(update, context)
         
-        # Buscar el canal en los seleccionados
-        selected_ids = [ch['channel_id'] for ch in state["selected_channels"]]
+        # Seleccionar todos los canales
+        elif callback_data == "post_chan_select_all":
+            state["selected_channels"] = db.get_auto_post_channels()
+            await query.answer("Todos los canales seleccionados")
+            await select_post_channels(update, context)
         
-        if channel_id in selected_ids:
-            # Deseleccionar canal
-            state["selected_channels"] = [ch for ch in state["selected_channels"] if ch['channel_id'] != channel_id]
-            await query.answer("Canal deseleccionado")
-        else:
-            # Seleccionar canal (buscar información completa)
-            for channel in all_channels:
-                if channel['channel_id'] == channel_id:
-                    state["selected_channels"].append(channel)
-                    await query.answer("Canal seleccionado")
-                    break
+        # Deseleccionar todos los canales
+        elif callback_data == "post_chan_deselect_all":
+            state["selected_channels"] = []
+            await query.answer("Todos los canales deseleccionados")
+            await select_post_channels(update, context)
+        
+        # Cancelar selección
+        elif callback_data == "post_cancel_input":
+            state["current_step"] = "text"
+            await show_post_creation_menu(query, user_id)
+        
+    except Exception as e:
+        logger.error(f"Error en handle_channel_selection: {e}")
+        if "message is not modified" not in str(e):
+            await query.answer("Error al procesar la selección", show_alert=True)
+
+async def process_button_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Procesa la entrada de texto para botones."""
+    user_id = update.effective_user.id
     
-    # Manejar selección de todos los canales
-    elif callback_data == "post_chan_select_all":
-        state["selected_channels"] = all_channels.copy()
-        await query.answer("Todos los canales seleccionados")
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        return
     
-    # Manejar deselección de todos los canales
-    elif callback_data == "post_chan_deselect_all":
-        state["selected_channels"] = []
-        await query.answer("Se han deseleccionado todos los canales")
+    state = post_creation_state[user_id]
+    current_step = state["current_step"]
     
-    # Actualizar la lista de canales
-    await select_post_channels(update, context)
+    if current_step == "waiting_for_button_text":
+        # Guardar el texto del botón y solicitar URL o callback data
+        state["temp_button_text"] = update.message.text
+        state["current_step"] = "waiting_for_button_url" if state["button_type"] == "url" else "waiting_for_button_callback"
+        
+        await update.message.reply_text(
+            "Por favor, envía el " + 
+            ("enlace (URL)" if state["button_type"] == "url" else "callback data") +
+            " para el botón:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
+            ]])
+        )
+        
+    elif current_step == "waiting_for_button_url":
+        # Validar y guardar URL
+        url = update.message.text
+        if not url.startswith(('http://', 'https://', 't.me/')):
+            await update.message.reply_text(
+                "❌ URL inválida. Debe comenzar con http://, https:// o t.me/\n"
+                "Por favor, intenta nuevamente:"
+            )
+            return
+        
+        # Crear y guardar el botón
+        new_button = {
+            "text": state["temp_button_text"],
+            "url": url
+        }
+        state["buttons"].append(new_button)
+        
+        # Limpiar estado temporal
+        state["current_step"] = "text"
+        del state["temp_button_text"]
+        del state["button_type"]
+        
+        # Confirmar y mostrar menú de botones
+        await update.message.reply_text("✅ Botón añadido correctamente.")
+        await show_post_creation_menu(update.message, user_id)
+        
+    elif current_step == "waiting_for_button_callback":
+        # Validar y guardar callback data
+        callback_data = update.message.text
+        if len(callback_data) > 64:
+            await update.message.reply_text(
+                "❌ Callback data demasiado largo. Máximo 64 caracteres.\n"
+                "Por favor, intenta nuevamente:"
+            )
+            return
+        
+        # Crear y guardar el botón
+        new_button = {
+            "text": state["temp_button_text"],
+            "callback_data": callback_data
+        }
+        state["buttons"].append(new_button)
+        
+        # Limpiar estado temporal
+        state["current_step"] = "text"
+        del state["temp_button_text"]
+        del state["button_type"]
+        
+        # Confirmar y mostrar menú de botones
+        await update.message.reply_text("✅ Botón añadido correctamente.")
+        await show_post_creation_menu(update.message, user_id)
+        
+    elif current_step == "waiting_for_edit_button_text":
+        # Editar texto de un botón existente
+        button_index = state.get("editing_button_index")
+        if button_index is not None and 0 <= button_index < len(state["buttons"]):
+            state["buttons"][button_index]["text"] = update.message.text
+            
+            # Limpiar estado de edición
+            state["current_step"] = "text"
+            del state["editing_button_index"]
+            
+            # Confirmar y mostrar menú de botones
+            await update.message.reply_text("✅ Texto del botón actualizado.")
+            await show_post_creation_menu(update.message, user_id)
 
 async def configure_post_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Configura la programación del post."""
@@ -2475,6 +2573,121 @@ async def configure_post_schedule(update: Update, context: ContextTypes.DEFAULT_
         reply_markup=reply_markup
     )
 
+async def handle_button_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja las acciones relacionadas con los botones del post."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID or user_id not in post_creation_state:
+        await query.answer("No hay un proceso de creación de post activo.", show_alert=True)
+        return
+    
+    state = post_creation_state[user_id]
+    callback_data = query.data
+    
+    # Añadir botón con URL
+    if callback_data == "post_btn_add_url":
+        state["current_step"] = "waiting_for_button_text"
+        state["button_type"] = "url"
+        await query.edit_message_text(
+            "Por favor, envía el texto que deseas mostrar en el botón:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
+            ]])
+        )
+    
+    # Añadir botón con callback
+    elif callback_data == "post_btn_add_cb":
+        state["current_step"] = "waiting_for_button_text"
+        state["button_type"] = "callback"
+        await query.edit_message_text(
+            "Por favor, envía el texto que deseas mostrar en el botón:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
+            ]])
+        )
+    
+    # Editar botón existente
+    elif callback_data == "post_btn_edit":
+        if not state["buttons"]:
+            await query.answer("No hay botones para editar.", show_alert=True)
+            return
+        
+        keyboard = []
+        for i, button in enumerate(state["buttons"]):
+            keyboard.append([InlineKeyboardButton(
+                f"Editar: {button['text']}", 
+                callback_data=f"post_btn_edit_{i}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_btn_back")])
+        await query.edit_message_text(
+            "Selecciona el botón que deseas editar:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    # Eliminar botón
+    elif callback_data == "post_btn_delete":
+        if not state["buttons"]:
+            await query.answer("No hay botones para eliminar.", show_alert=True)
+            return
+        
+        keyboard = []
+        for i, button in enumerate(state["buttons"]):
+            keyboard.append([InlineKeyboardButton(
+                f"Eliminar: {button['text']}", 
+                callback_data=f"post_btn_delete_{i}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_btn_back")])
+        await query.edit_message_text(
+            "Selecciona el botón que deseas eliminar:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    # Confirmar eliminación de botón
+    elif callback_data.startswith("post_btn_delete_"):
+        try:
+            button_index = int(callback_data.split("_")[-1])
+            if 0 <= button_index < len(state["buttons"]):
+                deleted_button = state["buttons"].pop(button_index)
+                await query.answer(f"Botón '{deleted_button['text']}' eliminado.")
+                await handle_post_buttons(update, context)
+            else:
+                await query.answer("Índice de botón inválido.", show_alert=True)
+        except (ValueError, IndexError):
+            await query.answer("Error al eliminar el botón.", show_alert=True)
+    
+    # Iniciar edición de botón específico
+    elif callback_data.startswith("post_btn_edit_"):
+        try:
+            button_index = int(callback_data.split("_")[-1])
+            if 0 <= button_index < len(state["buttons"]):
+                state["current_step"] = "waiting_for_edit_button_text"
+                state["editing_button_index"] = button_index
+                await query.edit_message_text(
+                    "Por favor, envía el nuevo texto para el botón:",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
+                    ]])
+                )
+            else:
+                await query.answer("Índice de botón inválido.", show_alert=True)
+        except (ValueError, IndexError):
+            await query.answer("Error al editar el botón.", show_alert=True)
+    
+    # Cancelar acción de botones
+    elif callback_data == "post_btn_cancel":
+        state["current_step"] = "text"
+        await handle_post_buttons(update, context)
+    
+    # Volver al menú de botones
+    elif callback_data == "post_btn_back":
+        await handle_post_buttons(update, context)
+    
+    else:
+        await query.answer("Acción no reconocida.", show_alert=True)
+
 async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja la configuración de horarios del post."""
     query = update.callback_query
@@ -2488,162 +2701,193 @@ async def handle_schedule_setting(update: Update, context: ContextTypes.DEFAULT_
     schedule = state["schedule"]
     callback_data = query.data
     
-    # Configuración de hora
-    if callback_data == "post_sched_hour":
-        # Crear selector de hora (0-23)
-        keyboard = []
-        row = []
-        
-        for hour in range(24):
-            btn = InlineKeyboardButton(
-                f"{hour:02d}" + ("✓" if hour == schedule['hour'] else ""), 
-                callback_data=f"post_sched_set_hour_{hour}"
-            )
-            row.append(btn)
+    try:
+        # Configuración de hora
+        if callback_data == "post_sched_hour":
+            # Crear selector de hora (0-23)
+            keyboard = []
+            row = []
             
-            if (hour + 1) % 6 == 0:
-                keyboard.append(row)
-                row = []
-        
-        if row:
-            keyboard.append(row)
-        
-        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
-        
-        await query.edit_message_text(
-            "<b>⏰ Selecciona la hora para el post</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        
-    # Configuración de minutos
-    elif callback_data == "post_sched_minute":
-        # Crear selector de minutos (0, 15, 30, 45)
-        keyboard = []
-        row = []
-        
-        for minute in [0, 15, 30, 45]:
-            btn = InlineKeyboardButton(
-                f"{minute:02d}" + ("✓" if minute == schedule['minute'] else ""), 
-                callback_data=f"post_sched_set_minute_{minute}"
-            )
-            row.append(btn)
-        
-        keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
-        
-        await query.edit_message_text(
-            "<b>⏰ Selecciona los minutos para el post</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    # Alternar modo diario/días específicos
-    elif callback_data == "post_sched_toggle_daily":
-        schedule['daily'] = not schedule['daily']
-        await query.answer(f"Modo {'diario' if schedule['daily'] else 'días específicos'} activado")
-        await configure_post_schedule(update, context)
-    
-    # Seleccionar días específicos
-    elif callback_data == "post_sched_days":
-        days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-        keyboard = []
-        
-        for i, day in enumerate(days):
-            is_selected = i in schedule['days']
-            prefix = "✅" if is_selected else "❌"
-            keyboard.append([InlineKeyboardButton(
-                f"{prefix} {day}", 
-                callback_data=f"post_sched_toggle_day_{i}"
-            )])
-        
-        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
-        
-        await query.edit_message_text(
-            "<b>📆 Selecciona los días para publicar el post</b>\n\n"
-            "Marca los días en que se publicará el post:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    # Cambiar duración
-    elif callback_data == "post_sched_duration":
-        durations = [6, 12, 24, 48, 72]
-        keyboard = []
-        row = []
-        
-        for duration in durations:
-            btn = InlineKeyboardButton(
-                f"{duration}h" + ("✓" if duration == schedule['duration'] else ""), 
-                callback_data=f"post_sched_set_duration_{duration}"
-            )
-            row.append(btn)
+            for hour in range(24):
+                btn = InlineKeyboardButton(
+                    f"{hour:02d}" + ("✓" if hour == schedule['hour'] else ""), 
+                    callback_data=f"post_sched_set_hour_{hour}"
+                )
+                row.append(btn)
+                
+                if (hour + 1) % 6 == 0:
+                    keyboard.append(row)
+                    row = []
             
-            if len(row) == 3:
+            if row:
                 keyboard.append(row)
-                row = []
+            
+            keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
+            
+            await query.edit_message_text(
+                "<b>⏰ Selecciona la hora para el post</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
-        if row:
+        # Configuración de minutos
+        elif callback_data == "post_sched_minute":
+            # Crear selector de minutos (0, 15, 30, 45)
+            keyboard = []
+            row = []
+            
+            for minute in [0, 15, 30, 45]:
+                btn = InlineKeyboardButton(
+                    f"{minute:02d}" + ("✓" if minute == schedule['minute'] else ""), 
+                    callback_data=f"post_sched_set_minute_{minute}"
+                )
+                row.append(btn)
+            
             keyboard.append(row)
+            keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
+            
+            await query.edit_message_text(
+                "<b>⏰ Selecciona los minutos para el post</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
-        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
+        # Alternar modo diario/días específicos
+        elif callback_data == "post_sched_toggle_daily":
+            schedule['daily'] = not schedule['daily']
+            await query.answer(f"Modo {'diario' if schedule['daily'] else 'días específicos'} activado")
+            await configure_post_schedule(update, context)
         
-        await query.edit_message_text(
-            "<b>⏱️ Selecciona la duración del post</b>\n\n"
-            "¿Durante cuántas horas estará publicado el post?",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    # Manejar configuración de hora específica
-    elif callback_data.startswith("post_sched_set_hour_"):
-        hour = int(callback_data[18:])
-        schedule['hour'] = hour
-        await query.answer(f"Hora configurada: {hour:02d}:00")
-        await configure_post_schedule(update, context)
-    
-    # Manejar configuración de minutos específicos
-    elif callback_data.startswith("post_sched_set_minute_"):
-        minute = int(callback_data[20:])
-        schedule['minute'] = minute
-        await query.answer(f"Minutos configurados: {minute:02d}")
-        await configure_post_schedule(update, context)
-    
-    # Manejar toggle de días específicos
-    elif callback_data.startswith("post_sched_toggle_day_"):
-        day_index = int(callback_data[19:])
+        # Seleccionar días específicos
+        elif callback_data == "post_sched_days":
+            days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+            keyboard = []
+            
+            for i, day in enumerate(days):
+                is_selected = i in schedule['days']
+                prefix = "✅" if is_selected else "❌"
+                keyboard.append([InlineKeyboardButton(
+                    f"{prefix} {day}", 
+                    callback_data=f"post_sched_toggle_day_{i}"
+                )])
+            
+            keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
+            
+            await query.edit_message_text(
+                "<b>📆 Selecciona los días para publicar el post</b>\n\n"
+                "Marca los días en que se publicará el post:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
-        if day_index in schedule['days']:
-            schedule['days'].remove(day_index)
-            await query.answer(f"Día deseleccionado")
+        # Cambiar duración
+        elif callback_data == "post_sched_duration":
+            durations = [6, 12, 24, 48, 72]
+            keyboard = []
+            row = []
+            
+            for duration in durations:
+                btn = InlineKeyboardButton(
+                    f"{duration}h" + ("✓" if duration == schedule['duration'] else ""), 
+                    callback_data=f"post_sched_set_duration_{duration}"
+                )
+                row.append(btn)
+                
+                if len(row) == 3:
+                    keyboard.append(row)
+                    row = []
+            
+            if row:
+                keyboard.append(row)
+            
+            keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="post_sched")])
+            
+            await query.edit_message_text(
+                "<b>⏱️ Selecciona la duración del post</b>\n\n"
+                "¿Durante cuántas horas estará publicado el post?",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        # Manejar configuración de hora específica
+        elif callback_data.startswith("post_sched_set_hour_"):
+            try:
+                hour = int(callback_data.split("_")[-1])
+                if 0 <= hour < 24:
+                    schedule['hour'] = hour
+                    await query.answer(f"Hora configurada: {hour:02d}:00")
+                    await configure_post_schedule(update, context)
+                else:
+                    await query.answer("Hora inválida", show_alert=True)
+            except (ValueError, IndexError):
+                await query.answer("Error en el formato de hora", show_alert=True)
+        
+        # Manejar configuración de minutos específicos
+        elif callback_data.startswith("post_sched_set_minute_"):
+            try:
+                minute = int(callback_data.split("_")[-1])
+                if minute in [0, 15, 30, 45]:
+                    schedule['minute'] = minute
+                    await query.answer(f"Minutos configurados: {minute:02d}")
+                    await configure_post_schedule(update, context)
+                else:
+                    await query.answer("Valor de minutos inválido", show_alert=True)
+            except (ValueError, IndexError):
+                await query.answer("Error en el formato de minutos", show_alert=True)
+        
+        # Manejar toggle de días específicos
+        elif callback_data.startswith("post_sched_toggle_day_"):
+            try:
+                day_index = int(callback_data.split("_")[-1])
+                if 0 <= day_index <= 6:
+                    if day_index in schedule['days']:
+                        schedule['days'].remove(day_index)
+                        await query.answer("Día deseleccionado")
+                    else:
+                        schedule['days'].append(day_index)
+                        await query.answer("Día seleccionado")
+                    
+                    # Si no hay días seleccionados, seleccionar al menos uno (hoy)
+                    if not schedule['days']:
+                        today = datetime.now().weekday()
+                        schedule['days'].append(today)
+                    
+                    # Ordenar los días
+                    schedule['days'].sort()
+                    
+                    await handle_schedule_setting(update, context)
+                else:
+                    await query.answer("Día inválido", show_alert=True)
+            except (ValueError, IndexError):
+                await query.answer("Error en el formato del día", show_alert=True)
+        
+        # Manejar configuración de duración
+        elif callback_data.startswith("post_sched_set_duration_"):
+            try:
+                duration = int(callback_data.split("_")[-1])
+                if duration in [6, 12, 24, 48, 72]:
+                    schedule['duration'] = duration
+                    await query.answer(f"Duración configurada: {duration} horas")
+                    await configure_post_schedule(update, context)
+                else:
+                    await query.answer("Duración inválida", show_alert=True)
+            except (ValueError, IndexError):
+                await query.answer("Error en el formato de duración", show_alert=True)
+        
+        # Volver al menú de programación
+        elif callback_data == "post_sched":
+            await configure_post_schedule(update, context)
+        
         else:
-            schedule['days'].append(day_index)
-            await query.answer(f"Día seleccionado")
-        
-        # Si no hay días seleccionados, seleccionar al menos uno (hoy)
-        if not schedule['days']:
-            today = datetime.now().weekday()
-            schedule['days'].append(today)
-        
-        # Ordenar los días
-        schedule['days'].sort()
-        
-        # Volver a mostrar el selector de días
-        await handle_schedule_setting(update, context)
-    
-    # Manejar configuración de duración
-    elif callback_data.startswith("post_sched_set_duration_"):
-        duration = int(callback_data[22:])
-        schedule['duration'] = duration
-        await query.answer(f"Duración configurada: {duration} horas")
-        await configure_post_schedule(update, context)
-    
-    # Volver al menú de programación
-    elif callback_data == "post_sched":
-        await configure_post_schedule(update, context)
-    
-    else:
-        await query.answer("Esta opción aún no está implementada", show_alert=True)
+            await query.answer("Esta opción aún no está implementada", show_alert=True)
+            
+    except telegram.error.BadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"Error en handle_schedule_setting: {e}")
+            await query.answer("Error al procesar la solicitud", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error inesperado en handle_schedule_setting: {e}")
+        await query.answer("Error al procesar la solicitud", show_alert=True)
 
 async def preview_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Muestra una vista previa del post."""
