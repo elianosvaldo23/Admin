@@ -49,6 +49,11 @@ user_last_activity = {}  # Para seguimiento de actividad
 user_editing_state = {}  # Para seguimiento de estados de edición
 scheduled_posts = {}  # Para posts programados
 
+post_creation_state = {}  # Estado de creación de posts
+user_editing_state = {}   # Estado de edición de usuario
+admin_rejecting = {}      # Estado de rechazo de admin
+pending_submissions = {}   # Solicitudes pendientes
+
 def init_post_state(user_id: int) -> None:
     """Inicializa el estado de creación de post para un usuario."""
     post_creation_state[user_id] = {
@@ -122,6 +127,18 @@ def format_time_delta(seconds):
         return f"{seconds // 3600} horas"
     else:
         return f"{seconds // 86400} días"
+
+# Manejador de errores
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja los errores del bot."""
+    logger.error(f"Error: {context.error}")
+    try:
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                "Ha ocurrido un error al procesar tu solicitud. Por favor, intenta nuevamente."
+            )
+    except:
+        pass
 
 # Manejadores de comandos
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1098,10 +1115,11 @@ async def handle_delete_channel(update: Update, context: ContextTypes.DEFAULT_TY
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja callbacks de botones en un bot de Telegram."""
     query = update.callback_query
-    await query.answer()
-    
+    user_id = query.from_user.id
     callback_data = query.data
-    user_id = update.effective_user.id
+
+    # Declarar el uso de variables globales
+    global post_creation_state, user_editing_state, admin_rejecting, pending_submissions
     
     # Manejar canales y grupos del usuario
     if callback_data == "user_channels":
@@ -4999,8 +5017,10 @@ def main() -> None:
         handle_text_input_router
     ))
         
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))    
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
+    application.add_error_handler(error_handler)
+                            
         # Manejar mensajes de texto y fotos del administrador
     application.add_handler(MessageHandler(
         filters.TEXT & filters.User(ADMIN_ID) & ~filters.COMMAND & filters.ChatType.PRIVATE,
@@ -5019,7 +5039,11 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_message))
     
     # Ejecutar el bot hasta que el usuario presione Ctrl-C
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
+        
 
 if __name__ == "__main__":
     main()
