@@ -2182,6 +2182,10 @@ async def handle_text_input_router(update: Update, context: ContextTypes.DEFAULT
     """Enruta las entradas de texto a la función adecuada según el estado del usuario."""
     user_id = update.effective_user.id
     
+    # Verificar que hay mensaje y texto
+    if not update.message or not update.message.text:
+        return
+        
     # Manejar textos para posts
     if user_id in post_creation_state:
         state = post_creation_state[user_id]
@@ -2190,7 +2194,13 @@ async def handle_text_input_router(update: Update, context: ContextTypes.DEFAULT
         if current_step == "waiting_for_text":
             await process_post_text(update, context)
             return
-        elif current_step == "waiting_for_button_text" or current_step == "waiting_for_button_url" or current_step == "waiting_for_button_callback" or current_step == "waiting_for_edit_button_text":
+        elif current_step == "waiting_for_button_text":
+            await process_button_input(update, context)
+            return
+        elif current_step == "waiting_for_button_url":
+            await process_button_input(update, context)
+            return
+        elif current_step == "waiting_for_button_callback":
             await process_button_input(update, context)
             return
     
@@ -2278,6 +2288,9 @@ async def process_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     # Enviar confirmación
     await update.message.reply_text("✅ Texto guardado correctamente.")
+    
+    # Mostrar menú actualizado
+    await show_post_creation_menu(update.message, user_id)
     
     # Enviar menú actualizado
     keyboard = [
@@ -2626,22 +2639,29 @@ async def process_button_input(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     state = post_creation_state[user_id]
-    current_step = state["current_step"]
+    current_step = state.get("current_step", "")
     
     if current_step == "waiting_for_button_text":
         # Guardar el texto del botón y solicitar URL o callback data
         state["temp_button_text"] = update.message.text
-        state["current_step"] = "waiting_for_button_url" if state["button_type"] == "url" else "waiting_for_button_callback"
         
-        await update.message.reply_text(
-            "Por favor, envía el " + 
-            ("enlace (URL)" if state["button_type"] == "url" else "callback data") +
-            " para el botón:",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
-            ]])
-        )
-        
+        if state.get("button_type") == "url":
+            state["current_step"] = "waiting_for_button_url"
+            await update.message.reply_text(
+                "Por favor, envía el enlace (URL) para el botón:",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
+                ]])
+            )
+        else:
+            state["current_step"] = "waiting_for_button_callback"
+            await update.message.reply_text(
+                "Por favor, envía el callback data para el botón:",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Cancelar", callback_data="post_btn_cancel")
+                ]])
+            )
+            
     elif current_step == "waiting_for_button_url":
         # Validar y guardar URL
         url = update.message.text
@@ -2657,13 +2677,16 @@ async def process_button_input(update: Update, context: ContextTypes.DEFAULT_TYP
             "text": state["temp_button_text"],
             "url": url
         }
+        if "buttons" not in state:
+            state["buttons"] = []
         state["buttons"].append(new_button)
         
-        # Limpiar estado temporal y confirmar
+        # Limpiar estado temporal
         state["current_step"] = "text"
         del state["temp_button_text"]
         del state["button_type"]
         
+        # Confirmar y mostrar menú
         await update.message.reply_text("✅ Botón añadido correctamente.")
         await show_post_creation_menu(update.message, user_id)
         
@@ -2682,13 +2705,16 @@ async def process_button_input(update: Update, context: ContextTypes.DEFAULT_TYP
             "text": state["temp_button_text"],
             "callback_data": callback_data
         }
+        if "buttons" not in state:
+            state["buttons"] = []
         state["buttons"].append(new_button)
         
-        # Limpiar estado temporal y confirmar
+        # Limpiar estado temporal
         state["current_step"] = "text"
         del state["temp_button_text"]
         del state["button_type"]
         
+        # Confirmar y mostrar menú
         await update.message.reply_text("✅ Botón añadido correctamente.")
         await show_post_creation_menu(update.message, user_id)
 
