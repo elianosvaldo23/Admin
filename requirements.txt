@@ -1,4 +1,34 @@
-python-telegram-bot[job-queue]>=20.0
-pymongo==4.5.0
-dnspython==2.4.2
-python-dotenv==1.0.0
+# Dependencias para el bot de Telegram - Terabox
+
+# Bot de Telegram
+python-telegram-bot==20.7
+
+# Peticiones HTTP
+requests==2.31.0
+urllib3==2.1.0
+
+# Manejo de datos
+python-decouple==3.8
+
+# Logging mejorado
+colorlog==6.8.0
+
+# Utilidades adicionales
+python-dateutil==2.8.2
+
+# Para manejo asíncrono
+aiohttp==3.9.1
+aiofiles==23.2.1
+
+# Para parsing HTML si es necesario
+beautifulsoup4==4.12.2
+lxml==4.9.4
+
+# Validación de URLs
+validators==0.22.0
+
+# Para manejo de archivos temporales
+tempfile
+
+# Criptografía para tokens
+cryptography==41.0.8
